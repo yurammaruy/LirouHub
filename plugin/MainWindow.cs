@@ -14,12 +14,14 @@ public sealed class MainWindow : Window
 
     private readonly ModuleHost host;
     private readonly QuestTracker tracker;
+    private readonly NucleoHost nucleo;
     private bool mostrarDetalhes;
 
-    public MainWindow(ModuleHost host, QuestTracker tracker) : base("Lirou Hub###LirouHubMain")
+    public MainWindow(ModuleHost host, QuestTracker tracker, NucleoHost nucleo) : base("Lirou Hub###LirouHubMain")
     {
         this.host = host;
         this.tracker = tracker;
+        this.nucleo = nucleo;
         Size = new Vector2(620, 520);
         SizeCondition = ImGuiCond.FirstUseEver;
     }
@@ -44,7 +46,7 @@ public sealed class MainWindow : Window
 
         ImGui.Separator();
         if (ImGui.Button("Copiar relatório"))
-            ImGui.SetClipboardText(tracker.Relatorio() + "\n" + host.Relatorio());
+            ImGui.SetClipboardText(tracker.Relatorio() + "\n" + nucleo.Relatorio() + "\n" + host.Relatorio());
         ImGui.SameLine();
         ImGui.Checkbox("Mostrar detalhes das quests", ref mostrarDetalhes);
 
@@ -52,6 +54,9 @@ public sealed class MainWindow : Window
         {
             foreach (var e in tracker.Eventos()) ImGui.TextWrapped(e);
         }
+
+        if (ImGui.CollapsingHeader("Núcleo (experimental)"))
+            DesenharNucleo();
 
         if (ImGui.CollapsingHeader("Arquivos dos plugins (verificação)"))
             DesenharArquivos();
@@ -111,6 +116,49 @@ public sealed class MainWindow : Window
         if (!rodando) ImGui.BeginDisabled();
         if (ImGui.Button($"Stop###stop{q.Id}")) tracker.Parar();
         if (!rodando) ImGui.EndDisabled();
+    }
+
+    private void DesenharNucleo()
+    {
+        ImGui.TextWrapped("Liga por dentro do Lirou Hub os plugins de que o bot precisa, usando os arquivos já baixados. " +
+                          "Antes, desative os originais (vnavmesh, TextAdvance, Lifestream, Questionable) em /xlplugins.");
+
+        var prontos = !host.Ocupado && host.Repos.All(r => r.Estado == Situacao.Ok);
+
+        if (!nucleo.Ligado)
+        {
+            if (nucleo.Ocupado || !prontos) ImGui.BeginDisabled();
+            if (ImGui.Button("Ligar núcleo")) nucleo.Ligar();
+            if (nucleo.Ocupado || !prontos) ImGui.EndDisabled();
+            if (!prontos) ImGui.TextColored(Amarelo, "Espere a verificação dos arquivos terminar (tudo OK).");
+        }
+        else
+        {
+            if (nucleo.Ocupado) ImGui.BeginDisabled();
+            if (ImGui.Button("Desligar núcleo")) nucleo.Desligar();
+            if (nucleo.Ocupado) ImGui.EndDisabled();
+        }
+
+        var n = 0;
+        foreach (var m in nucleo.Itens)
+        {
+            var texto = m.Estado switch
+            {
+                Situacao.Ok => $"{m.Nome}: OK",
+                Situacao.Erro => $"{m.Nome}: ERRO",
+                Situacao.Trabalhando => $"{m.Nome}: ligando...",
+                _ => $"{m.Nome}: parado",
+            };
+            ImGui.PushStyleColor(ImGuiCol.Text, Cor(m.Estado));
+            var abrir = ImGui.CollapsingHeader($"{texto}###nuc{n}");
+            ImGui.PopStyleColor();
+            n++;
+            if (!abrir) continue;
+
+            if (m.Msg.Length > 0) ImGui.TextWrapped(m.Msg);
+            foreach (var l in m.Linhas()) ImGui.TextWrapped(l);
+            foreach (var i in m.Ipcs) ImGui.TextColored(Cinza, i);
+        }
     }
 
     private void DesenharArquivos()

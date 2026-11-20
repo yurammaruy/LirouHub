@@ -90,7 +90,7 @@ public sealed class ModuleHost : IDisposable
     private static HttpClient CriarHttp()
     {
         var c = new HttpClient { Timeout = TimeSpan.FromSeconds(120) };
-        c.DefaultRequestHeaders.UserAgent.ParseAdd("LirouHub/0.0.0.5");
+        c.DefaultRequestHeaders.UserAgent.ParseAdd("LirouHub/0.0.0.6");
         return c;
     }
 
@@ -300,7 +300,7 @@ public sealed class ModuleHost : IDisposable
     private static string Texto(JsonElement el, string nome)
         => el.TryGetProperty(nome, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
 
-    private static string Segura(string s)
+    internal static string Segura(string s)
         => new string(s.Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
 
     public string Relatorio()

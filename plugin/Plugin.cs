@@ -19,13 +19,14 @@ public sealed class Plugin : IDalamudPlugin
     public Plugin(
         IDalamudPluginInterface pluginInterface,
         ICommandManager commandManager,
-        IPluginLog log)
+        IPluginLog log,
+        IDataManager dataManager)
     {
         pi = pluginInterface;
         commands = commandManager;
 
         Host = new ModuleHost(pluginInterface, log);
-        janela = new MainWindow(Host);
+        janela = new MainWindow(Host, new QuestTracker(dataManager, log));
         windows.AddWindow(janela);
 
         pi.UiBuilder.Draw += windows.Draw;

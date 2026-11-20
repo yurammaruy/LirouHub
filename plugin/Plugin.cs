@@ -1,0 +1,93 @@
+using Dalamud.Game.Command;
+using Dalamud.Interface.Windowing;
+using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
+
+namespace LirouHub;
+
+public sealed class Plugin : IDalamudPlugin
+{
+    private const string Comando = "/lirouhub";
+
+    private readonly IDalamudPluginInterface pi;
+    private readonly ICommandManager commands;
+    private readonly WindowSystem windows = new("LirouHub");
+    private readonly MainWindow janela;
+
+    public ModuleHost Host { get; }
+
+    public Plugin(
+        IDalamudPluginInterface pluginInterface,
+        ICommandManager commandManager,
+        IPluginLog log,
+        IFramework framework,
+        IChatGui chat,
+        IClientState clientState,
+        IObjectTable objectTable,
+        IDataManager dataManager,
+        ICondition condition,
+        IGameGui gameGui,
+        ITextureProvider textureProvider,
+        IGameInteropProvider interop,
+        ISigScanner sigScanner,
+        IPartyList partyList,
+        ITargetManager targetManager,
+        IToastGui toastGui,
+        IAddonLifecycle addonLifecycle,
+        IKeyState keyState,
+        INotificationManager notifications)
+    {
+        pi = pluginInterface;
+        commands = commandManager;
+
+        // Peças do jogo que o hospedeiro repassa aos módulos que pedirem.
+        var servicos = new Dictionary<Type, object>();
+        void Add<T>(T s) where T : class => servicos[typeof(T)] = s;
+        Add(commandManager);
+        Add(log);
+        Add(framework);
+        Add(chat);
+        Add(clientState);
+        Add(objectTable);
+        Add(dataManager);
+        Add(condition);
+        Add(gameGui);
+        Add(textureProvider);
+        Add(interop);
+        Add(sigScanner);
+        Add(partyList);
+        Add(targetManager);
+        Add(toastGui);
+        Add(addonLifecycle);
+        Add(keyState);
+        Add(notifications);
+
+        Host = new ModuleHost(pluginInterface, framework, log, servicos);
+        janela = new MainWindow(Host);
+        windows.AddWindow(janela);
+
+        pi.UiBuilder.Draw += windows.Draw;
+        pi.UiBuilder.OpenMainUi += janela.Toggle;
+        pi.UiBuilder.OpenConfigUi += janela.Toggle;
+
+        commands.AddHandler(Comando, new CommandInfo(OnComando)
+        {
+            HelpMessage = "Abre ou fecha a janela do Lirou Hub.",
+        });
+
+        janela.IsOpen = true;
+        Host.Iniciar();
+    }
+
+    private void OnComando(string command, string args) => janela.Toggle();
+
+    public void Dispose()
+    {
+        commands.RemoveHandler(Comando);
+        pi.UiBuilder.Draw -= windows.Draw;
+        pi.UiBuilder.OpenMainUi -= janela.Toggle;
+        pi.UiBuilder.OpenConfigUi -= janela.Toggle;
+        windows.RemoveAllWindows();
+        Host.Dispose();
+    }
+}

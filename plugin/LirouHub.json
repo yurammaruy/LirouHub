@@ -1,0 +1,9 @@
+{
+  "Author": "Lirou",
+  "Name": "Lirou Hub",
+  "InternalName": "LirouHub",
+  "Punchline": "Carrega o FFBL e o Twitch World por dentro e mostra se deu certo.",
+  "Description": "Plugin hospedeiro: busca o FFBL e o Twitch World nos repositórios do GitHub, liga os dois dentro dele e mostra um OK verde ou um relatório de erro. Comando: /lirouhub",
+  "ApplicableVersion": "any",
+  "Tags": ["hub", "ffbl", "twitch"]
+}

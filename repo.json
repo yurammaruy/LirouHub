@@ -3,7 +3,7 @@
     "Author": "Lirou",
     "Name": "Lirou Hub",
     "InternalName": "LirouHub",
-    "AssemblyVersion": "0.0.0.1",
+    "AssemblyVersion": "0.0.0.2",
     "Description": "Plugin hospedeiro: busca o FFBL e o Twitch World nos repositorios do GitHub, liga os dois dentro dele e mostra um OK verde ou um relatorio de erro. Comando: /lirouhub",
     "Punchline": "Carrega o FFBL e o Twitch World por dentro e mostra se deu certo.",
     "ApplicableVersion": "any",
@@ -19,6 +19,6 @@
     "DownloadLinkInstall": "https://github.com/yurammaruy/LirouHub/releases/latest/download/latest.zip",
     "DownloadLinkTesting": "https://github.com/yurammaruy/LirouHub/releases/latest/download/latest.zip",
     "DownloadLinkUpdate": "https://github.com/yurammaruy/LirouHub/releases/latest/download/latest.zip",
-    "LastUpdate": 1795194996
+    "LastUpdate": 1795207757
   }
 ]

@@ -15,18 +15,89 @@ public sealed class Plugin : IDalamudPlugin
     private readonly MainWindow janela;
 
     public ModuleHost Host { get; }
+    public NucleoHost Nucleo { get; }
 
     public Plugin(
         IDalamudPluginInterface pluginInterface,
         ICommandManager commandManager,
         IPluginLog log,
-        IDataManager dataManager)
+        IFramework framework,
+        IChatGui chat,
+        IClientState clientState,
+        IObjectTable objectTable,
+        IDataManager dataManager,
+        ICondition condition,
+        IGameGui gameGui,
+        ITextureProvider textureProvider,
+        IGameInteropProvider interop,
+        ISigScanner sigScanner,
+        IPartyList partyList,
+        ITargetManager targetManager,
+        IToastGui toastGui,
+        IAddonLifecycle addonLifecycle,
+        IKeyState keyState,
+        INotificationManager notifications,
+        ITextureReadbackProvider textureReadback,
+        IPlayerState playerState,
+        IAddonEventManager addonEvents,
+        IDtrBar dtrBar,
+        IContextMenu contextMenu,
+        IDutyState dutyState,
+        IGameConfig gameConfig,
+        IGameInventory gameInventory,
+        IGamepadState gamepadState,
+        IJobGauges jobGauges,
+        IFateTable fateTable,
+        IBuddyList buddyList,
+        IAetheryteList aetheryteList,
+        IFlyTextGui flyTextGui,
+        ITitleScreenMenu titleMenu,
+        INamePlateGui namePlateGui)
     {
         pi = pluginInterface;
         commands = commandManager;
 
+        // Peças do jogo que o hospedeiro repassa aos plugins que ele liga por dentro.
+        var servicos = new Dictionary<Type, object>();
+        void Add<T>(T s) where T : class => servicos[typeof(T)] = s;
+        Add(commandManager);
+        Add(log);
+        Add(framework);
+        Add(chat);
+        Add(clientState);
+        Add(objectTable);
+        Add(dataManager);
+        Add(condition);
+        Add(gameGui);
+        Add(textureProvider);
+        Add(interop);
+        Add(sigScanner);
+        Add(partyList);
+        Add(targetManager);
+        Add(toastGui);
+        Add(addonLifecycle);
+        Add(keyState);
+        Add(notifications);
+        Add(textureReadback);
+        Add(playerState);
+        Add(addonEvents);
+        Add(dtrBar);
+        Add(contextMenu);
+        Add(dutyState);
+        Add(gameConfig);
+        Add(gameInventory);
+        Add(gamepadState);
+        Add(jobGauges);
+        Add(fateTable);
+        Add(buddyList);
+        Add(aetheryteList);
+        Add(flyTextGui);
+        Add(titleMenu);
+        Add(namePlateGui);
+
         Host = new ModuleHost(pluginInterface, log);
-        janela = new MainWindow(Host, new QuestTracker(dataManager, log));
+        Nucleo = new NucleoHost(pluginInterface, framework, log, servicos, Host.PastaArquivos);
+        janela = new MainWindow(Host, new QuestTracker(dataManager, log), Nucleo);
         windows.AddWindow(janela);
 
         pi.UiBuilder.Draw += windows.Draw;
@@ -51,6 +122,7 @@ public sealed class Plugin : IDalamudPlugin
         pi.UiBuilder.OpenMainUi -= janela.Toggle;
         pi.UiBuilder.OpenConfigUi -= janela.Toggle;
         windows.RemoveAllWindows();
+        Nucleo.Dispose();
         Host.Dispose();
     }
 }

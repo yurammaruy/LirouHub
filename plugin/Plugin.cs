@@ -19,82 +19,12 @@ public sealed class Plugin : IDalamudPlugin
     public Plugin(
         IDalamudPluginInterface pluginInterface,
         ICommandManager commandManager,
-        IPluginLog log,
-        IFramework framework,
-        IChatGui chat,
-        IClientState clientState,
-        IObjectTable objectTable,
-        IDataManager dataManager,
-        ICondition condition,
-        IGameGui gameGui,
-        ITextureProvider textureProvider,
-        IGameInteropProvider interop,
-        ISigScanner sigScanner,
-        IPartyList partyList,
-        ITargetManager targetManager,
-        IToastGui toastGui,
-        IAddonLifecycle addonLifecycle,
-        IKeyState keyState,
-        INotificationManager notifications,
-        ITextureReadbackProvider textureReadback,
-        IPlayerState playerState,
-        IAddonEventManager addonEvents,
-        IDtrBar dtrBar,
-        IContextMenu contextMenu,
-        IDutyState dutyState,
-        IGameConfig gameConfig,
-        IGameInventory gameInventory,
-        IGamepadState gamepadState,
-        IJobGauges jobGauges,
-        IFateTable fateTable,
-        IBuddyList buddyList,
-        IAetheryteList aetheryteList,
-        IFlyTextGui flyTextGui,
-        ITitleScreenMenu titleMenu,
-        INamePlateGui namePlateGui)
+        IPluginLog log)
     {
         pi = pluginInterface;
         commands = commandManager;
 
-        // Peças do jogo que o hospedeiro repassa aos módulos que pedirem.
-        var servicos = new Dictionary<Type, object>();
-        void Add<T>(T s) where T : class => servicos[typeof(T)] = s;
-        Add(commandManager);
-        Add(log);
-        Add(framework);
-        Add(chat);
-        Add(clientState);
-        Add(objectTable);
-        Add(dataManager);
-        Add(condition);
-        Add(gameGui);
-        Add(textureProvider);
-        Add(interop);
-        Add(sigScanner);
-        Add(partyList);
-        Add(targetManager);
-        Add(toastGui);
-        Add(addonLifecycle);
-        Add(keyState);
-        Add(notifications);
-        Add(textureReadback);
-        Add(playerState);
-        Add(addonEvents);
-        Add(dtrBar);
-        Add(contextMenu);
-        Add(dutyState);
-        Add(gameConfig);
-        Add(gameInventory);
-        Add(gamepadState);
-        Add(jobGauges);
-        Add(fateTable);
-        Add(buddyList);
-        Add(aetheryteList);
-        Add(flyTextGui);
-        Add(titleMenu);
-        Add(namePlateGui);
-
-        Host = new ModuleHost(pluginInterface, framework, log, servicos);
+        Host = new ModuleHost(pluginInterface, log);
         janela = new MainWindow(Host);
         windows.AddWindow(janela);
 

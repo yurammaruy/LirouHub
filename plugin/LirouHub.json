@@ -1,10 +1,9 @@
-<Project Sdk="Dalamud.NET.Sdk/15.0.0">
-  <PropertyGroup>
-    <TargetFramework>net10.0-windows</TargetFramework>
-    <Version>0.0.0.2</Version>
-    <AssemblyName>LirouHub</AssemblyName>
-    <RootNamespace>LirouHub</RootNamespace>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
-</Project>
+{
+  "Author": "Lirou",
+  "Name": "Lirou Hub",
+  "InternalName": "LirouHub",
+  "Punchline": "Carrega o FFBL e o Twitch World por dentro e mostra se deu certo.",
+  "Description": "Plugin hospedeiro: busca o FFBL e o Twitch World nos repositórios do GitHub, liga os dois dentro dele e mostra um OK verde ou um relatório de erro. Comando: /lirouhub",
+  "ApplicableVersion": "any",
+  "Tags": ["hub", "ffbl", "twitch"]
+}

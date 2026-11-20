@@ -124,7 +124,7 @@ public sealed class ModuleHost : IDisposable
     private static HttpClient CriarHttp()
     {
         var c = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
-        c.DefaultRequestHeaders.UserAgent.ParseAdd("LirouHub/0.0.0.1");
+        c.DefaultRequestHeaders.UserAgent.ParseAdd("LirouHub/0.0.0.2");
         return c;
     }
 
@@ -257,6 +257,43 @@ public sealed class ModuleHost : IDisposable
         var args = new object?[ps.Length];
         var faltam = new List<string>();
         IDalamudPluginInterface? proxy = null;
+
+        // Jeito antigo do Dalamud: peças em campos estáticos marcados com [PluginService].
+        // O Dalamud só preenche isso para plugins instalados por ele, então preenchemos aqui.
+        const BindingFlags Todos = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+        for (var t = tipo; t != null && t != typeof(object); t = t.BaseType)
+        {
+            foreach (var mem in t.GetMembers(Todos))
+            {
+                if (mem is not (PropertyInfo or FieldInfo)) continue;
+                if (!mem.GetCustomAttributes(false).Any(a => a.GetType().Name == "PluginServiceAttribute")) continue;
+
+                var mt = mem is PropertyInfo pr ? pr.PropertyType : ((FieldInfo)mem).FieldType;
+                object? valor;
+                if (mt == typeof(IDalamudPluginInterface))
+                {
+                    proxy ??= CriarProxy(m, ctx);
+                    valor = proxy;
+                }
+                else if (!servicos.TryGetValue(mt, out valor))
+                {
+                    faltam.Add(mt.FullName ?? mt.Name);
+                    continue;
+                }
+
+                try
+                {
+                    if (mem is PropertyInfo p2) p2.SetValue(null, valor);
+                    else ((FieldInfo)mem).SetValue(null, valor);
+                    m.Add($"Peça entregue (estática): {mt.Name} em {mem.Name}");
+                }
+                catch (Exception ex)
+                {
+                    m.Add($"Não consegui preencher {mem.Name}: {ex.Message}");
+                    faltam.Add(mt.FullName ?? mt.Name);
+                }
+            }
+        }
 
         for (var i = 0; i < ps.Length; i++)
         {

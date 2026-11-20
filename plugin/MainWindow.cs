@@ -10,13 +10,17 @@ public sealed class MainWindow : Window
     private static readonly Vector4 Vermelho = new(0.95f, 0.35f, 0.35f, 1f);
     private static readonly Vector4 Amarelo = new(0.95f, 0.80f, 0.30f, 1f);
     private static readonly Vector4 Cinza = new(0.70f, 0.70f, 0.70f, 1f);
+    private static readonly Vector4 Ouro = new(1.00f, 0.82f, 0.25f, 1f);
 
     private readonly ModuleHost host;
+    private readonly QuestTracker tracker;
+    private bool mostrarDetalhes;
 
-    public MainWindow(ModuleHost host) : base("Lirou Hub###LirouHubMain")
+    public MainWindow(ModuleHost host, QuestTracker tracker) : base("Lirou Hub###LirouHubMain")
     {
         this.host = host;
-        Size = new Vector2(680, 460);
+        this.tracker = tracker;
+        Size = new Vector2(620, 520);
         SizeCondition = ImGuiCond.FirstUseEver;
     }
 
@@ -31,35 +35,86 @@ public sealed class MainWindow : Window
 
     public override void Draw()
     {
-        var totalOk = 0;
-        var totalTodos = 0;
-        var erros = 0;
-        long bytes = 0;
-        var repoErro = false;
-        var repoPendente = false;
+        tracker.Atualizar();
 
-        foreach (var r in host.Repos)
-        {
-            if (r.Estado == Situacao.Erro) repoErro = true;
-            if (r.Estado != Situacao.Ok && r.Estado != Situacao.Erro) repoPendente = true;
-            foreach (var i in r.Itens())
-            {
-                totalTodos++;
-                if (i.Estado == Situacao.Ok || i.Estado == Situacao.Pulado) totalOk++;
-                if (i.Estado == Situacao.Erro) erros++;
-                bytes += i.Bytes;
-            }
-        }
-
-        if (host.Ocupado || repoPendente)
-            ImGui.TextColored(Amarelo, $"Verificando... {totalOk} de {totalTodos} plugins conferidos.");
-        else if (repoErro || erros > 0)
-            ImGui.TextColored(Vermelho, $"ERRO: {erros} plugins com problema. Use Copiar relatório.");
-        else
-            ImGui.TextColored(Verde, $"OK: {totalOk} plugins baixados e conferidos ({bytes / 1024 / 1024} MB). Nada foi executado.");
-
+        ImGui.TextColored(Cinza, "Bot: ainda não conectado (Start e Stop só registram o pedido).");
         ImGui.Separator();
 
+        DesenharQuests();
+
+        ImGui.Separator();
+        if (ImGui.Button("Copiar relatório"))
+            ImGui.SetClipboardText(tracker.Relatorio() + "\n" + host.Relatorio());
+        ImGui.SameLine();
+        ImGui.Checkbox("Mostrar detalhes das quests", ref mostrarDetalhes);
+
+        if (ImGui.CollapsingHeader("Registro"))
+        {
+            foreach (var e in tracker.Eventos()) ImGui.TextWrapped(e);
+        }
+
+        if (ImGui.CollapsingHeader("Arquivos dos plugins (verificação)"))
+            DesenharArquivos();
+    }
+
+    private void DesenharQuests()
+    {
+        if (tracker.Erro.Length > 0)
+        {
+            ImGui.TextColored(Vermelho, tracker.Erro);
+            return;
+        }
+
+        var ativas = tracker.Ativas;
+        if (ativas.Count == 0)
+        {
+            ImGui.TextColored(Cinza, "Nenhuma quest ativa no diário.");
+            return;
+        }
+
+        var msq = ativas.Where(q => q.Msq).ToList();
+        var outras = ativas.Where(q => !q.Msq).ToList();
+
+        ImGui.TextColored(Ouro, "MAIN SCENARIO QUEST");
+        if (msq.Count == 0)
+        {
+            ImGui.TextColored(Cinza, "Nenhuma identificada.");
+        }
+        foreach (var q in msq) DesenharQuest(q, true);
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.TextColored(Cinza, $"Outras quests ({outras.Count})");
+        foreach (var q in outras) DesenharQuest(q, false);
+    }
+
+    private void DesenharQuest(QuestAtiva q, bool destaque)
+    {
+        ImGui.Spacing();
+        var rodando = tracker.EmExecucao == q.Id;
+
+        ImGui.TextColored(destaque ? Ouro : Vector4.One, q.Nome);
+        if (rodando)
+        {
+            ImGui.SameLine();
+            ImGui.TextColored(Verde, "  [marcada para rodar]");
+        }
+        if (mostrarDetalhes)
+            ImGui.TextColored(Cinza, $"ID {q.Id}  |  icone {q.IconeEvento}  |  genero {q.Genero}");
+
+        if (tracker.EmExecucao != null) ImGui.BeginDisabled();
+        if (ImGui.Button($"Start###start{q.Id}")) tracker.Iniciar(q);
+        if (tracker.EmExecucao != null) ImGui.EndDisabled();
+
+        ImGui.SameLine();
+
+        if (!rodando) ImGui.BeginDisabled();
+        if (ImGui.Button($"Stop###stop{q.Id}")) tracker.Parar();
+        if (!rodando) ImGui.EndDisabled();
+    }
+
+    private void DesenharArquivos()
+    {
         var n = 0;
         foreach (var r in host.Repos)
         {
@@ -79,7 +134,7 @@ public sealed class MainWindow : Window
             n++;
             if (!abrir) continue;
 
-            ImGui.TextColored(Cinza, $"{r.Grupo}");
+            ImGui.TextColored(Cinza, r.Grupo);
             if (r.Msg.Length > 0) ImGui.TextWrapped(r.Msg);
             foreach (var i in itens)
             {
@@ -89,9 +144,6 @@ public sealed class MainWindow : Window
             }
         }
 
-        ImGui.Separator();
-        if (ImGui.Button("Copiar relatório")) ImGui.SetClipboardText(host.Relatorio());
-        ImGui.SameLine();
         if (host.Ocupado) ImGui.BeginDisabled();
         if (ImGui.Button("Verificar de novo")) host.Recarregar();
         if (host.Ocupado) ImGui.EndDisabled();

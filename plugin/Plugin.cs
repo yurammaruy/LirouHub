@@ -35,7 +35,23 @@ public sealed class Plugin : IDalamudPlugin
         IToastGui toastGui,
         IAddonLifecycle addonLifecycle,
         IKeyState keyState,
-        INotificationManager notifications)
+        INotificationManager notifications,
+        ITextureReadbackProvider textureReadback,
+        IPlayerState playerState,
+        IAddonEventManager addonEvents,
+        IDtrBar dtrBar,
+        IContextMenu contextMenu,
+        IDutyState dutyState,
+        IGameConfig gameConfig,
+        IGameInventory gameInventory,
+        IGamepadState gamepadState,
+        IJobGauges jobGauges,
+        IFateTable fateTable,
+        IBuddyList buddyList,
+        IAetheryteList aetheryteList,
+        IFlyTextGui flyTextGui,
+        ITitleScreenMenu titleMenu,
+        INamePlateGui namePlateGui)
     {
         pi = pluginInterface;
         commands = commandManager;
@@ -61,6 +77,22 @@ public sealed class Plugin : IDalamudPlugin
         Add(addonLifecycle);
         Add(keyState);
         Add(notifications);
+        Add(textureReadback);
+        Add(playerState);
+        Add(addonEvents);
+        Add(dtrBar);
+        Add(contextMenu);
+        Add(dutyState);
+        Add(gameConfig);
+        Add(gameInventory);
+        Add(gamepadState);
+        Add(jobGauges);
+        Add(fateTable);
+        Add(buddyList);
+        Add(aetheryteList);
+        Add(flyTextGui);
+        Add(titleMenu);
+        Add(namePlateGui);
 
         Host = new ModuleHost(pluginInterface, framework, log, servicos);
         janela = new MainWindow(Host);

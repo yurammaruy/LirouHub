@@ -121,7 +121,9 @@ public sealed class ChecagemWindow : Window
         if (malhaPronta) ImGui.TextColored(Verde, "[ OK ] Malha do mapa pronta: o personagem já pode andar.");
         else
         {
-            ImGui.TextColored(Amarelo, "[ ... ] Malha do mapa ainda não ficou pronta.");
+            ImGui.TextColored(Amarelo, progressoMalha < 0
+                ? "[ ... ] Barra encerrada, esperando a malha ficar pronta (se passar de 2 minutos o Hub recarrega sozinho)."
+                : "[ ... ] Construindo a malha do mapa...");
             ImGui.ProgressBar(Math.Clamp(progressoMalha, 0f, 1f), new Vector2(-1, 0), $"{Math.Clamp(progressoMalha, 0f, 1f) * 100:0}%");
             if (ImGui.Button("Reconstruir malha###malha"))
             {

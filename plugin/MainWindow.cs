@@ -66,6 +66,8 @@ public sealed class MainWindow : Window
         if (ImGui.CollapsingHeader("Movimento (diagnóstico)"))
         {
             foreach (var l in tracker.Sonda()) ImGui.TextWrapped(l);
+            if (ImGui.Button("Ler log do Dalamud###lerlog")) tracker.LerLog();
+            foreach (var l in tracker.LogDoDalamud()) ImGui.TextWrapped(l);
             ImGui.TextColored(Amarelo, "Mensagens do Questionable no chat:");
             foreach (var l in tracker.MensagensDoBot()) ImGui.TextWrapped(l);
         }

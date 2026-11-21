@@ -33,6 +33,9 @@ public sealed unsafe class QuestTracker : IDisposable
     private readonly List<string> chatQst = new();
     private long ultimaSonda = -10000;
     private long ultimoPonto = -10000;
+    private long malhaParadaDesde = -1;
+    private int tentativasMalha;
+    private string[] logDalamud = Array.Empty<string>();
     private readonly List<string> historicoMalha = new();
     private System.Numerics.Vector3 posAnterior;
     private long moveuEm;
@@ -91,6 +94,72 @@ public sealed unsafe class QuestTracker : IDisposable
         catch (Exception ex) { return "sem resposta (" + ex.GetType().Name + ")"; }
     }
 
+    /// <summary>
+    /// Se a construção da malha acabou (progresso -1) mas ela não ficou pronta, pede ao vnavmesh para
+    /// recarregar. No máximo 3 tentativas, só depois de 2 minutos parada, e cada uma entra no registro.
+    /// </summary>
+    private void VigiarMalha()
+    {
+        try
+        {
+            var pronta = Pergunta<bool>("vnavmesh.Nav.IsReady") == "True";
+            var progTxt = Pergunta<float>("vnavmesh.Nav.BuildProgress");
+            var prog = float.TryParse(progTxt, out var pv) ? pv : 0f;
+            if (pronta || prog >= 0f)
+            {
+                malhaParadaDesde = -1;
+                if (pronta) tentativasMalha = 0;
+                return;
+            }
+            if (malhaParadaDesde < 0) { malhaParadaDesde = relogio.ElapsedMilliseconds; return; }
+            if (relogio.ElapsedMilliseconds - malhaParadaDesde < 120000 || tentativasMalha >= 3) return;
+
+            tentativasMalha++;
+            malhaParadaDesde = relogio.ElapsedMilliseconds;
+            string r;
+            try { r = pi.GetIpcSubscriber<bool>("vnavmesh.Nav.Reload").InvokeFunc().ToString(); }
+            catch (Exception ex) { r = "sem resposta (" + ex.GetType().Name + ")"; }
+            Evento($"Malha parou sem ficar pronta: pedi Nav.Reload (tentativa {tentativasMalha}/3). Resposta: {r}");
+        }
+        catch { /* só vigilância */ }
+    }
+
+    /// <summary>Lê o final do log do Dalamud e guarda as linhas do Lirou Hub e dos plugins internos (só quando pedido).</summary>
+    public void LerLog()
+    {
+        try
+        {
+            var pasta = pi.ConfigDirectory.Parent?.Parent?.FullName;
+            if (pasta == null) { logDalamud = new[] { "Pasta do log não encontrada." }; return; }
+            var arq = Path.Combine(pasta, "dalamud.log");
+            if (!File.Exists(arq)) { logDalamud = new[] { "dalamud.log não encontrado em " + pasta }; return; }
+
+            using var fs = new FileStream(arq, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var tam = 600_000L;
+            if (fs.Length > tam) fs.Seek(-tam, SeekOrigin.End);
+            using var rd = new StreamReader(fs);
+            var linhas = new List<string>();
+            string? ln;
+            var anexar = false;
+            while ((ln = rd.ReadLine()) != null)
+            {
+                var ehNosso = ln.Contains("[LirouHub]") || ln.Contains("navmesh", StringComparison.OrdinalIgnoreCase)
+                              || ln.Contains("vnavmesh", StringComparison.OrdinalIgnoreCase);
+                if (ehNosso) { linhas.Add(ln.Length > 300 ? ln[..300] : ln); anexar = true; }
+                else if (anexar && (ln.StartsWith("   at ") || ln.StartsWith("System.") || ln.Length == 0)) { if (ln.Length > 0) linhas.Add(ln.Length > 200 ? ln[..200] : ln); }
+                else anexar = false;
+            }
+            logDalamud = linhas.Skip(Math.Max(0, linhas.Count - 70)).ToArray();
+            if (logDalamud.Length == 0) logDalamud = new[] { "(nenhuma linha do Hub ou do vnavmesh no final do log)" };
+        }
+        catch (Exception ex)
+        {
+            logDalamud = new[] { "Não consegui ler o log: " + ex.Message };
+        }
+    }
+
+    public string[] LogDoDalamud() => logDalamud;
+
     /// <summary>Pergunta aos plugins internos como estão (só leitura) para vermos por que o bot anda ou não.</summary>
     private void FazerSonda()
     {
@@ -122,7 +191,8 @@ public sealed unsafe class QuestTracker : IDisposable
             }
         }
         catch { }
-        l.Add("Malha (progresso a cada 5s): " + string.Join("  ", historicoMalha));
+        VigiarMalha();
+        l.Add("Malha (progresso a cada 5s): " + string.Join("  ", historicoMalha) + $"  | tentativas de reconstrução: {tentativasMalha}");
         l.Add("vnavmesh: pronto=" + Pergunta<bool>("vnavmesh.Nav.IsReady")
               + ", construindo=" + Pergunta<float>("vnavmesh.Nav.BuildProgress")
               + ", andando=" + Pergunta<bool>("vnavmesh.Path.IsRunning")
@@ -307,6 +377,9 @@ public sealed unsafe class QuestTracker : IDisposable
         foreach (var e in Eventos()) sb.AppendLine("   " + e);
         sb.AppendLine("== Sonda (movimento)");
         foreach (var e in Sonda()) sb.AppendLine("   " + e);
+        LerLog();
+        sb.AppendLine("== Log do Dalamud (linhas do Hub e do navmesh)");
+        foreach (var e in logDalamud) sb.AppendLine("   " + e);
         sb.AppendLine("== Mensagens do Questionable no chat");
         foreach (var e in MensagensDoBot()) sb.AppendLine("   " + e);
         return sb.ToString();

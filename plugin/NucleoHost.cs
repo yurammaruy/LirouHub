@@ -143,8 +143,8 @@ public sealed class NucleoHost : IDisposable
     {
         try
         {
-            var pasta = Path.Combine(raizArquivos, ModuleHost.Segura(m.Repo), ModuleHost.Segura(m.Nome), "atual");
-            if (!Directory.Exists(pasta))
+            var pasta = ModuleHost.PastaAtual(Path.Combine(raizArquivos, ModuleHost.Segura(m.Repo), ModuleHost.Segura(m.Nome)));
+            if (pasta == null)
             {
                 m.AddAchado(Nivel.Erro, "Arquivos não encontrados. Deixe a verificação dos arquivos terminar primeiro.");
                 return;
@@ -354,9 +354,9 @@ public sealed class NucleoHost : IDisposable
         m.Estado = Situacao.Trabalhando;
         try
         {
-            var pasta = Path.Combine(raizArquivos, ModuleHost.Segura(m.Repo), ModuleHost.Segura(m.Nome), "atual");
-            if (!Directory.Exists(pasta))
-                throw new DirectoryNotFoundException("Arquivos não encontrados (rode a verificação primeiro): " + pasta);
+            var pasta = ModuleHost.PastaAtual(Path.Combine(raizArquivos, ModuleHost.Segura(m.Repo), ModuleHost.Segura(m.Nome)));
+            if (pasta == null)
+                throw new DirectoryNotFoundException("Arquivos não encontrados (rode a verificação dos arquivos primeiro).");
 
             var dll = Directory.GetFiles(pasta, m.Nome + ".dll", SearchOption.AllDirectories).FirstOrDefault()
                 ?? throw new FileNotFoundException($"Não achei {m.Nome}.dll em {pasta}");

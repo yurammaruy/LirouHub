@@ -1,15 +1,22 @@
 using System.Reflection;
 using System.Runtime.ExceptionServices;
+using System.Runtime.Loader;
 using System.Text;
+using System.Text.Json;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 
 namespace LirouHub;
 
+public enum Nivel { Ok, Aviso, Erro }
+
+public sealed record Achado(Nivel Nivel, string Texto);
+
 /// <summary>Um plugin que o núcleo liga por dentro, a partir dos arquivos já baixados.</summary>
 public sealed class NucleoItem
 {
     private readonly List<string> linhas = new();
+    private readonly List<Achado> achados = new();
 
     public NucleoItem(string nome, string repo)
     {
@@ -30,6 +37,13 @@ public sealed class NucleoItem
     public void Add(string t) { lock (linhas) linhas.Add($"{DateTime.Now:HH:mm:ss}  {t}"); }
     public string[] Linhas() { lock (linhas) return linhas.ToArray(); }
 
+    public void AddAchado(Nivel n, string t) { lock (achados) achados.Add(new Achado(n, t)); }
+    public Achado[] Achados() { lock (achados) return achados.ToArray(); }
+    public void LimparAchados() { lock (achados) achados.Clear(); }
+
+    public bool TemErro => Achados().Any(a => a.Nivel == Nivel.Erro);
+    public bool TemAviso => Achados().Any(a => a.Nivel == Nivel.Aviso);
+
     public void Limpar()
     {
         lock (linhas) linhas.Clear();
@@ -41,16 +55,22 @@ public sealed class NucleoItem
 
 /// <summary>
 /// Liga, por dentro do Lirou Hub, os plugins de que o bot depende (na ordem), usando os arquivos
-/// que a verificação já baixou. Só roda quando o usuário aperta o botão.
+/// que a verificação já baixou. Antes de ligar, confere tudo; só liga quando o usuário aperta o botão.
 /// </summary>
 public sealed class NucleoHost : IDisposable
 {
+    // Nível de API do Dalamud para o qual o Lirou Hub é compilado (igual ao do release.yml).
+    private const int NivelApiHub = 15;
+
+    private static readonly AssemblyLoadContext HostCtx =
+        AssemblyLoadContext.GetLoadContext(typeof(NucleoHost).Assembly)!;
+
     private readonly IDalamudPluginInterface pi;
     private readonly IFramework framework;
     private readonly IPluginLog log;
     private readonly Dictionary<Type, object> servicos;
     private readonly string raizArquivos;
-    private readonly string raizConfig;
+    private readonly ConfigSandbox sandbox;
     private volatile bool ocupado;
 
     public NucleoHost(IDalamudPluginInterface pi, IFramework framework, IPluginLog log,
@@ -61,7 +81,7 @@ public sealed class NucleoHost : IDisposable
         this.log = log;
         this.servicos = servicos;
         this.raizArquivos = raizArquivos;
-        raizConfig = pi.ConfigDirectory.FullName;
+        sandbox = new ConfigSandbox(pi.ConfigDirectory.FullName, pi.ConfigFile.FullName);
 
         // Ordem de ligação: quem os outros usam vem primeiro.
         Itens = new[]
@@ -76,16 +96,220 @@ public sealed class NucleoHost : IDisposable
     public IReadOnlyList<NucleoItem> Itens { get; }
     public bool Ocupado => ocupado;
     public bool Ligado { get; private set; }
+    public bool VerificacaoFeita { get; private set; }
+    public bool PodeLigar => VerificacaoFeita && !Itens.Any(i => i.TemErro);
+
+    // ---------------------------------------------------------------- conferência antes de ligar
+
+    public void Verificar()
+    {
+        if (ocupado) return;
+        ocupado = true;
+        VerificacaoFeita = false;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                foreach (var m in Itens) m.LimparAchados();
+
+                List<string> ligados;
+                try
+                {
+                    ligados = await framework.RunOnFrameworkThread(() =>
+                        pi.InstalledPlugins.Where(p => p.IsLoaded).Select(p => p.InternalName).ToList());
+                }
+                catch (Exception ex)
+                {
+                    ligados = new List<string>();
+                    log.Error(ex, "[LirouHub] Não consegui listar os plugins instalados");
+                }
+
+                foreach (var m in Itens) VerificarUm(m, ligados);
+            }
+            catch (Exception ex)
+            {
+                log.Error(ex, "[LirouHub] Falha na conferência do núcleo");
+                foreach (var m in Itens) m.AddAchado(Nivel.Erro, "Falha na conferência: " + ex.Message);
+            }
+            finally
+            {
+                VerificacaoFeita = true;
+                ocupado = false;
+            }
+        });
+    }
+
+    private void VerificarUm(NucleoItem m, List<string> ligados)
+    {
+        try
+        {
+            var pasta = Path.Combine(raizArquivos, ModuleHost.Segura(m.Repo), ModuleHost.Segura(m.Nome), "atual");
+            if (!Directory.Exists(pasta))
+            {
+                m.AddAchado(Nivel.Erro, "Arquivos não encontrados. Deixe a verificação dos arquivos terminar primeiro.");
+                return;
+            }
+
+            var dll = Directory.GetFiles(pasta, m.Nome + ".dll", SearchOption.AllDirectories).FirstOrDefault();
+            if (dll == null)
+            {
+                m.AddAchado(Nivel.Erro, $"Não achei {m.Nome}.dll nos arquivos baixados.");
+                return;
+            }
+            m.AddAchado(Nivel.Ok, "Arquivos encontrados.");
+
+            // 1) O original ligado duplicaria comandos e IPCs.
+            if (ligados.Any(n => string.Equals(n, m.Nome, StringComparison.OrdinalIgnoreCase)))
+                m.AddAchado(Nivel.Erro, $"O plugin original '{m.Nome}' está ligado em /xlplugins. Desative-o, senão comandos e IPCs duplicam.");
+            else
+                m.AddAchado(Nivel.Ok, "O original não está ligado.");
+
+            // 2) Nível da API do Dalamud.
+            var manifest = Directory.GetFiles(pasta, m.Nome + ".json", SearchOption.AllDirectories).FirstOrDefault();
+            if (manifest != null)
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(File.ReadAllText(manifest));
+                    if (doc.RootElement.TryGetProperty("DalamudApiLevel", out var v) && v.TryGetInt32(out var nivel))
+                    {
+                        if (nivel != NivelApiHub)
+                            m.AddAchado(Nivel.Aviso, $"Feito para a API {nivel} do Dalamud; o Lirou Hub usa a {NivelApiHub}.");
+                        else
+                            m.AddAchado(Nivel.Ok, $"API do Dalamud compatível ({nivel}).");
+                    }
+                }
+                catch { /* manifest ilegível: ignora */ }
+            }
+
+            // 3) Inspeção do código, sem executar nada (em um espaço descartável).
+            var pastaDll = Path.GetDirectoryName(dll)!;
+            var ctx = new ModuloContext(m.Nome + ".inspecao", pastaDll);
+            try
+            {
+                var asm = ctx.LoadFromAssemblyPath(dll);
+                ChecarReferencias(m, asm, pastaDll);
+
+                Type[] tipos;
+                try
+                {
+                    tipos = asm.GetTypes();
+                }
+                catch (ReflectionTypeLoadException rex)
+                {
+                    var motivos = rex.LoaderExceptions.Where(e => e != null).Select(e => e!.Message).Distinct().Take(6);
+                    m.AddAchado(Nivel.Erro, "Partes do código não carregam: " + string.Join(" | ", motivos));
+                    return;
+                }
+
+                var tipo = tipos.FirstOrDefault(t => t.IsClass && !t.IsAbstract && typeof(IDalamudPlugin).IsAssignableFrom(t));
+                if (tipo == null)
+                {
+                    m.AddAchado(Nivel.Erro, "Não achei a classe de entrada (IDalamudPlugin).");
+                    return;
+                }
+
+                var faltam = PecasFaltando(tipo);
+                if (faltam.Count == 0)
+                    m.AddAchado(Nivel.Ok, "Todas as peças do jogo que ele pede estão disponíveis.");
+                else
+                    m.AddAchado(Nivel.Erro, "Faltam estas peças do jogo no Lirou Hub: " + string.Join(", ", faltam));
+            }
+            finally
+            {
+                try { ctx.Unload(); } catch { /* ignora */ }
+            }
+        }
+        catch (Exception ex)
+        {
+            m.AddAchado(Nivel.Erro, "Falha ao inspecionar: " + ex.Message);
+        }
+    }
+
+    private static void ChecarReferencias(NucleoItem m, Assembly asm, string pasta)
+    {
+        var faltando = new List<string>();
+        var versoes = new List<string>();
+
+        foreach (var r in asm.GetReferencedAssemblies())
+        {
+            var n = r.Name ?? "";
+            if (n.Length == 0 || n is "mscorlib" or "netstandard" or "WindowsBase") continue;
+
+            Assembly? doHost = null;
+            try { doHost = HostCtx.LoadFromAssemblyName(new AssemblyName(n)); }
+            catch { /* o Dalamud não tem essa biblioteca */ }
+
+            if (doHost != null)
+            {
+                var vh = doHost.GetName().Version;
+                var vr = r.Version;
+                if (vh != null && vr != null && vh.Major < vr.Major)
+                    versoes.Add($"{n}: o plugin pede {vr}, o Dalamud tem {vh}");
+                continue;
+            }
+
+            if (!File.Exists(Path.Combine(pasta, n + ".dll"))) faltando.Add(n);
+        }
+
+        if (faltando.Count > 0)
+            m.AddAchado(Nivel.Erro, "Faltam bibliotecas que o plugin usa: " + string.Join(", ", faltando));
+        if (versoes.Count > 0)
+            m.AddAchado(Nivel.Aviso, "Versões diferentes das bibliotecas: " + string.Join("; ", versoes));
+        if (faltando.Count == 0 && versoes.Count == 0)
+            m.AddAchado(Nivel.Ok, "Todas as bibliotecas necessárias estão disponíveis.");
+    }
+
+    private static bool TemPluginService(MemberInfo mem)
+    {
+        try { return mem.GetCustomAttributes(false).Any(a => a.GetType().Name == "PluginServiceAttribute"); }
+        catch { return false; }
+    }
+
+    private List<string> PecasFaltando(Type tipo)
+    {
+        var faltam = new List<string>();
+
+        var ctor = tipo.GetConstructors().OrderByDescending(c => c.GetParameters().Length).FirstOrDefault();
+        if (ctor != null)
+        {
+            foreach (var p in ctor.GetParameters())
+            {
+                var pt = p.ParameterType;
+                if (pt != typeof(IDalamudPluginInterface) && !servicos.ContainsKey(pt))
+                    faltam.Add(pt.Name);
+            }
+        }
+
+        const BindingFlags Todos = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+        for (var t = tipo; t != null && t != typeof(object); t = t.BaseType)
+        {
+            foreach (var mem in t.GetMembers(Todos))
+            {
+                if (mem is not (PropertyInfo or FieldInfo)) continue;
+                if (!TemPluginService(mem)) continue;
+                var mt = mem is PropertyInfo pr ? pr.PropertyType : ((FieldInfo)mem).FieldType;
+                if (mt != typeof(IDalamudPluginInterface) && !servicos.ContainsKey(mt))
+                    faltam.Add(mt.Name);
+            }
+        }
+
+        return faltam.Distinct().ToList();
+    }
+
+    // ---------------------------------------------------------------- ligar e desligar
 
     public void Ligar()
     {
-        if (ocupado || Ligado) return;
+        if (ocupado || Ligado || !PodeLigar) return;
         ocupado = true;
         _ = Task.Run(async () =>
         {
             try
             {
                 foreach (var m in Itens) m.Limpar();
+
+                await framework.RunOnFrameworkThread(() => sandbox.Backup(t => Itens[0].Add(t)));
 
                 var falhou = false;
                 foreach (var m in Itens)
@@ -162,7 +386,12 @@ public sealed class NucleoHost : IDisposable
                 ?? throw new Exception("Não achei a classe de entrada (IDalamudPlugin) dentro da DLL.");
             m.Add("Classe de entrada: " + tipo.FullName);
 
-            await framework.RunOnFrameworkThread(() => Instanciar(m, tipo, ctx));
+            await framework.RunOnFrameworkThread(() =>
+            {
+                sandbox.PrepararPara(m.Nome, m.Add);
+                Instanciar(m, tipo);
+                sandbox.GuardarDe(m.Nome, m.Add);
+            });
 
             m.Estado = Situacao.Ok;
             m.Msg = "Ligado.";
@@ -178,14 +407,13 @@ public sealed class NucleoHost : IDisposable
         }
     }
 
-    private void Instanciar(NucleoItem m, Type tipo, ModuloContext ctx)
+    private void Instanciar(NucleoItem m, Type tipo)
     {
         var ctor = tipo.GetConstructors().OrderByDescending(c => c.GetParameters().Length).FirstOrDefault()
             ?? throw new Exception("A classe de entrada não tem construtor público.");
         var ps = ctor.GetParameters();
         var args = new object?[ps.Length];
         var faltam = new List<string>();
-        IDalamudPluginInterface? proxy = null;
 
         // Peças em campos estáticos marcados com [PluginService] (jeito antigo do Dalamud).
         const BindingFlags Todos = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
@@ -194,14 +422,13 @@ public sealed class NucleoHost : IDisposable
             foreach (var mem in t.GetMembers(Todos))
             {
                 if (mem is not (PropertyInfo or FieldInfo)) continue;
-                if (!mem.GetCustomAttributes(false).Any(a => a.GetType().Name == "PluginServiceAttribute")) continue;
+                if (!TemPluginService(mem)) continue;
 
                 var mt = mem is PropertyInfo pr ? pr.PropertyType : ((FieldInfo)mem).FieldType;
                 object? valor;
                 if (mt == typeof(IDalamudPluginInterface))
                 {
-                    proxy ??= CriarProxy(m, ctx);
-                    valor = proxy;
+                    valor = pi;
                 }
                 else if (!servicos.TryGetValue(mt, out valor))
                 {
@@ -227,8 +454,7 @@ public sealed class NucleoHost : IDisposable
             var pt = ps[i].ParameterType;
             if (pt == typeof(IDalamudPluginInterface))
             {
-                proxy ??= CriarProxy(m, ctx);
-                args[i] = proxy;
+                args[i] = pi;
             }
             else if (servicos.TryGetValue(pt, out var s))
             {
@@ -253,20 +479,15 @@ public sealed class NucleoHost : IDisposable
         }
     }
 
-    private IDalamudPluginInterface CriarProxy(NucleoItem m, ModuloContext ctx)
-    {
-        var p = DispatchProxy.Create<IDalamudPluginInterface, PluginInterfaceProxy>();
-        ((PluginInterfaceProxy)(object)p).Iniciar(pi, Path.Combine(raizConfig, "configs", ModuleHost.Segura(m.Nome)), ctx);
-        return p;
-    }
-
     /// <summary>
-    /// Procura, sem executar nada do plugin, os nomes de IPC escritos no código dele
-    /// (constantes de texto que começam com o nome do plugin) e as classes com "Ipc" no nome.
+    /// Procura, sem executar nada do plugin, os nomes de IPC: constantes de texto e textos escritos
+    /// dentro do código (instruções ldstr) que começam com o nome do plugin, e classes com "Ipc" no nome.
     /// </summary>
     private static string[] ProcurarIpc(Type[] tipos, string nome)
     {
         var res = new List<string>();
+        var textos = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var t in tipos)
         {
             try
@@ -284,14 +505,64 @@ public sealed class NucleoHost : IDisposable
                 {
                     if (!f.IsLiteral || f.FieldType != typeof(string)) continue;
                     if (f.GetRawConstantValue() is string v && v.StartsWith(nome + ".", StringComparison.OrdinalIgnoreCase))
-                        res.Add($"{t.Name}.{f.Name} = {v}");
+                        textos.Add(v);
                 }
             }
             catch { /* tipo difícil de inspecionar: ignora */ }
-
-            if (res.Count >= 120) break;
         }
+
+        // Primeiro nas classes de IPC; se nada aparecer, em todo o código.
+        foreach (var t in tipos.Where(x => x.Name.Contains("Ipc", StringComparison.OrdinalIgnoreCase)))
+            foreach (var s in TextosDoTipo(t, nome)) textos.Add(s);
+        if (textos.Count == 0)
+        {
+            foreach (var t in tipos)
+            {
+                foreach (var s in TextosDoTipo(t, nome)) textos.Add(s);
+                if (textos.Count >= 200) break;
+            }
+        }
+
+        foreach (var s in textos.Take(200)) res.Add("[nome] " + s);
         return res.ToArray();
+    }
+
+    private static List<string> TextosDoTipo(Type t, string nome)
+    {
+        var achados = new List<string>();
+        const BindingFlags F = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public
+                               | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+        var metodos = new List<MethodBase>();
+        try
+        {
+            metodos.AddRange(t.GetMethods(F));
+            metodos.AddRange(t.GetConstructors(F));
+        }
+        catch { return achados; }
+
+        foreach (var mb in metodos)
+        {
+            byte[]? il;
+            try { il = mb.GetMethodBody()?.GetILAsByteArray(); }
+            catch { continue; }
+            if (il == null) continue;
+
+            for (var i = 0; i + 4 < il.Length; i++)
+            {
+                if (il[i] != 0x72) continue; // ldstr
+                var token = BitConverter.ToInt32(il, i + 1);
+                if ((token >> 24) != 0x70) continue; // não é um texto
+                try
+                {
+                    var s = mb.Module.ResolveString(token);
+                    if (s.Length < 120 && s.StartsWith(nome + ".", StringComparison.OrdinalIgnoreCase))
+                        achados.Add(s);
+                    i += 4;
+                }
+                catch { /* não era um texto de verdade */ }
+            }
+        }
+        return achados;
     }
 
     private void DescarregarAgora(NucleoItem m)
@@ -307,10 +578,11 @@ public sealed class NucleoHost : IDisposable
     public string Relatorio()
     {
         var sb = new StringBuilder();
-        sb.AppendLine("== Núcleo (ligado: " + Ligado + ")");
+        sb.AppendLine($"== Núcleo (ligado: {Ligado}, conferência feita: {VerificacaoFeita}, pode ligar: {PodeLigar})");
         foreach (var m in Itens)
         {
             sb.AppendLine($"   {m.Nome} [{m.Repo}]: {m.Estado}  {m.Msg}");
+            foreach (var a in m.Achados()) sb.AppendLine($"      [{a.Nivel}] {a.Texto}");
             foreach (var l in m.Linhas()) sb.AppendLine("      " + l);
             foreach (var i in m.Ipcs) sb.AppendLine("      IPC: " + i);
         }

@@ -20,11 +20,15 @@ public sealed class NucleoItem
     private readonly List<string> linhas = new();
     private readonly List<Achado> achados = new();
 
-    public NucleoItem(string nome, string repo)
+    public NucleoItem(string nome, string repo, bool opcional = false)
     {
         Nome = nome;
         Repo = repo;
+        Opcional = opcional;
     }
+
+    /// <summary>Se der problema, os outros continuam ligando (usado nos plugins de combate).</summary>
+    public bool Opcional { get; }
 
     public string Nome { get; }
     public string Repo { get; }
@@ -99,6 +103,8 @@ public sealed class NucleoHost : IDisposable
             new NucleoItem("vnavmesh", "Puni.sh (veyn)"),
             new NucleoItem("TextAdvance", "NightmareXIV"),
             new NucleoItem("Lifestream", "NightmareXIV"),
+            new NucleoItem("BossMod", "Puni.sh (veyn)", opcional: true),
+            new NucleoItem("RotationSolver", "Combat Reborn", opcional: true),
             new NucleoItem("Questionable", "Puni.sh (ment)"),
         };
     }
@@ -107,7 +113,7 @@ public sealed class NucleoHost : IDisposable
     public bool Ocupado => ocupado;
     public bool Ligado { get; private set; }
     public bool VerificacaoFeita { get; private set; }
-    public bool PodeLigar => VerificacaoFeita && !Itens.Any(i => i.TemErro);
+    public bool PodeLigar => VerificacaoFeita && !Itens.Any(i => !i.Opcional && i.TemErro);
 
     /// <summary>O Questionable está ligado por dentro do Hub.</summary>
     public bool QuestionablePronto => Itens.Any(i => i.Nome == "Questionable" && i.Estado == Situacao.Ok);
@@ -439,8 +445,14 @@ public sealed class NucleoHost : IDisposable
                         m.Msg = "Não tentado (um módulo anterior falhou).";
                         continue;
                     }
+                    if (m.Opcional && m.TemErro)
+                    {
+                        m.Estado = Situacao.Pulado;
+                        m.Msg = "Não ligado: a conferência achou problema (veja abaixo). O resto segue normalmente.";
+                        continue;
+                    }
                     await LigarUmAsync(m);
-                    if (m.Estado == Situacao.Erro) falhou = true;
+                    if (m.Estado == Situacao.Erro && !m.Opcional) falhou = true;
                 }
                 Ligado = Itens.Any(i => i.Estado == Situacao.Ok);
             }

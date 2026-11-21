@@ -96,7 +96,7 @@ public sealed unsafe class QuestTracker : IDisposable
 
     /// <summary>
     /// Se a construção da malha acabou (progresso -1) mas ela não ficou pronta, pede ao vnavmesh para
-    /// recarregar. No máximo 3 tentativas, só depois de 2 minutos parada, e cada uma entra no registro.
+    /// recarregar. No máximo 3 tentativas, só depois de 30 segundos parada, e cada uma entra no registro.
     /// </summary>
     private void VigiarMalha()
     {
@@ -112,11 +112,12 @@ public sealed unsafe class QuestTracker : IDisposable
                 return;
             }
             if (malhaParadaDesde < 0) { malhaParadaDesde = relogio.ElapsedMilliseconds; return; }
-            if (relogio.ElapsedMilliseconds - malhaParadaDesde < 120000 || tentativasMalha >= 3) return;
+            if (relogio.ElapsedMilliseconds - malhaParadaDesde < 30000 || tentativasMalha >= 3) return;
 
             tentativasMalha++;
             malhaParadaDesde = relogio.ElapsedMilliseconds;
             string r;
+            try { Directory.CreateDirectory(Path.Combine(pi.ConfigDirectory.FullName, "meshcache")); } catch { /* segue */ }
             try { r = pi.GetIpcSubscriber<bool>("vnavmesh.Nav.Reload").InvokeFunc().ToString(); }
             catch (Exception ex) { r = "sem resposta (" + ex.GetType().Name + ")"; }
             Evento($"Malha parou sem ficar pronta: pedi Nav.Reload (tentativa {tentativasMalha}/3). Resposta: {r}");

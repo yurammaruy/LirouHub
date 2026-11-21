@@ -122,7 +122,7 @@ public sealed class ChecagemWindow : Window
         else
         {
             ImGui.TextColored(Amarelo, progressoMalha < 0
-                ? "[ ... ] Barra encerrada, esperando a malha ficar pronta (se passar de 2 minutos o Hub recarrega sozinho)."
+                ? "[ ... ] Barra encerrada, esperando a malha ficar pronta (se passar de 30 segundos o Hub recarrega sozinho)."
                 : "[ ... ] Construindo a malha do mapa...");
             ImGui.ProgressBar(Math.Clamp(progressoMalha, 0f, 1f), new Vector2(-1, 0), $"{Math.Clamp(progressoMalha, 0f, 1f) * 100:0}%");
             if (ImGui.Button("Reconstruir malha###malha"))

@@ -14,6 +14,7 @@ internal sealed class ConfigSandbox
     private static readonly HashSet<string> Protegidos = new(StringComparer.OrdinalIgnoreCase)
     {
         "arquivos", "modulo-configs", "modulos", "configs",
+        "meshcache", // malhas de navegação do vnavmesh: ele não recria a pasta se ela sumir
     };
 
     private const string ArquivoEspecial = "__ConfigFile.json";

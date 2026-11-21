@@ -438,6 +438,10 @@ public sealed class NucleoHost : IDisposable
 
                 await framework.RunOnFrameworkThread(() => sandbox.Backup(t => Itens[0].Add(t)));
 
+                // O vnavmesh guarda as malhas aqui e não recria a pasta se ela não existir.
+                try { Directory.CreateDirectory(Path.Combine(pi.ConfigDirectory.FullName, "meshcache")); }
+                catch (Exception ex) { Itens[0].Add("Não consegui criar a pasta meshcache: " + ex.Message); }
+
                 var falhou = false;
                 foreach (var m in Itens)
                 {
@@ -456,6 +460,18 @@ public sealed class NucleoHost : IDisposable
                     if (m.Estado == Situacao.Erro && !m.Opcional) falhou = true;
                 }
                 Ligado = Itens.Any(i => i.Estado == Situacao.Ok);
+
+                // Se o vnavmesh já tentou montar a malha antes de tudo estar no lugar, pede de novo.
+                if (Itens.Any(i => i.Nome == "vnavmesh" && i.Estado == Situacao.Ok))
+                {
+                    try
+                    {
+                        Directory.CreateDirectory(Path.Combine(pi.ConfigDirectory.FullName, "meshcache"));
+                        var r = await framework.RunOnFrameworkThread(() => pi.GetIpcSubscriber<bool>("vnavmesh.Nav.Reload").InvokeFunc());
+                        Itens[0].Add($"vnavmesh: pedi a montagem da malha (Nav.Reload → {r}).");
+                    }
+                    catch (Exception ex) { Itens[0].Add("vnavmesh: Nav.Reload sem resposta: " + ex.GetType().Name); }
+                }
             }
             finally { ocupado = false; }
         });
@@ -827,10 +843,23 @@ public sealed class NucleoHost : IDisposable
 
     private static IEnumerable<(string Rel, string Full)> ListarRecursos(string pastaModulo)
     {
-        var proibidas = new[] { ".dll", ".pdb", ".json", ".zip", ".deps" };
+        var proibidas = new[] { ".dll", ".pdb", ".zip", ".deps" };
+        var nomesDll = new HashSet<string>(
+            Directory.GetFiles(pastaModulo, "*.dll").Select(f => Path.GetFileNameWithoutExtension(f)),
+            StringComparer.OrdinalIgnoreCase);
         foreach (var arq in Directory.GetFiles(pastaModulo))
         {
-            if (proibidas.Contains(Path.GetExtension(arq), StringComparer.OrdinalIgnoreCase)) continue;
+            var ext = Path.GetExtension(arq);
+            if (proibidas.Contains(ext, StringComparer.OrdinalIgnoreCase)) continue;
+            if (ext.Equals(".json", StringComparison.OrdinalIgnoreCase))
+            {
+                // Pula só os json "de sistema": manifesto (mesmo nome de uma DLL), .deps e .runtimeconfig.
+                // Os json de dados do plugin (ex.: DefaultRotationPresets.json) precisam ser copiados.
+                var semExt = Path.GetFileNameWithoutExtension(arq);
+                if (nomesDll.Contains(semExt)
+                    || semExt.EndsWith(".deps", StringComparison.OrdinalIgnoreCase)
+                    || semExt.EndsWith(".runtimeconfig", StringComparison.OrdinalIgnoreCase)) continue;
+            }
             yield return (Path.GetFileName(arq), arq);
         }
         foreach (var dir in Directory.GetDirectories(pastaModulo))

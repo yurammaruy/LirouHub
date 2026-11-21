@@ -97,7 +97,7 @@ public sealed class Plugin : IDalamudPlugin
 
         Host = new ModuleHost(pluginInterface, log);
         Nucleo = new NucleoHost(pluginInterface, framework, log, servicos, Host.PastaArquivos);
-        janela = new MainWindow(Host, new QuestTracker(dataManager, log), Nucleo);
+        janela = new MainWindow(Host, new QuestTracker(dataManager, log, pluginInterface, Nucleo), Nucleo);
         windows.AddWindow(janela);
 
         pi.UiBuilder.Draw += windows.Draw;

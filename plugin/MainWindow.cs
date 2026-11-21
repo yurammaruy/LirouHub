@@ -16,6 +16,7 @@ public sealed class MainWindow : Window
     private readonly QuestTracker tracker;
     private readonly NucleoHost nucleo;
     private bool mostrarDetalhes;
+    private bool ocultarJanelas = true;
 
     public MainWindow(ModuleHost host, QuestTracker tracker, NucleoHost nucleo) : base("Lirou Hub###LirouHubMain")
     {
@@ -38,8 +39,19 @@ public sealed class MainWindow : Window
     public override void Draw()
     {
         tracker.Atualizar();
+        if (ocultarJanelas) nucleo.OcultarJanelas();
 
-        ImGui.TextColored(Cinza, "Bot: ainda não conectado (Start e Stop só registram o pedido).");
+        if (tracker.BotPronto)
+        {
+            var atual = tracker.QuestionableRodando
+                ? $"fazendo a quest {(tracker.QuestIdAtual.Length > 0 ? tracker.QuestIdAtual : "...")}"
+                : "parado";
+            ImGui.TextColored(Verde, $"Bot: Questionable ligado por dentro do Hub, {atual}.");
+        }
+        else
+        {
+            ImGui.TextColored(Amarelo, "Bot: desligado. Abra o Núcleo e clique em Ligar núcleo para usar o Start.");
+        }
         ImGui.Separator();
 
         DesenharQuests();
@@ -107,9 +119,10 @@ public sealed class MainWindow : Window
         if (mostrarDetalhes)
             ImGui.TextColored(Cinza, $"ID {q.Id}  |  icone {q.IconeEvento}  |  genero {q.Genero}");
 
-        if (tracker.EmExecucao != null) ImGui.BeginDisabled();
+        var travarStart = tracker.EmExecucao != null || !tracker.BotPronto;
+        if (travarStart) ImGui.BeginDisabled();
         if (ImGui.Button($"Start###start{q.Id}")) tracker.Iniciar(q);
-        if (tracker.EmExecucao != null) ImGui.EndDisabled();
+        if (travarStart) ImGui.EndDisabled();
 
         ImGui.SameLine();
 
@@ -159,6 +172,10 @@ public sealed class MainWindow : Window
             if (ImGui.Button("Desligar núcleo###nucdesligar")) nucleo.Desligar();
             if (nucleo.Ocupado) ImGui.EndDisabled();
         }
+
+        ImGui.Checkbox("Ocultar as janelas dos plugins internos###nucocultar", ref ocultarJanelas);
+        if (nucleo.Ligado || nucleo.Itens.Any(i => i.Instancia != null))
+            ImGui.TextColored(Cinza, $"Sistemas de janelas encontrados: {nucleo.SistemasDeJanelas}. Janelas fechadas até agora: {nucleo.JanelasOcultadas}.");
 
         var n = 0;
         foreach (var m in nucleo.Itens)

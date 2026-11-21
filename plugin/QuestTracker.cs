@@ -116,6 +116,8 @@ public sealed unsafe class QuestTracker : IDisposable
         l.Add("TextAdvance: controle externo=" + Pergunta<bool>("TextAdvance.IsInExternalControl")
               + ", ocupado=" + Pergunta<bool>("TextAdvance.IsBusy"));
         l.Add("Lifestream: ocupado=" + Pergunta<bool>("Lifestream.IsBusy"));
+        l.Add("Nomes com prefixo do Hub (ECommons): LirouHub.IsInExternalControl=" + Pergunta<bool>("LirouHub.IsInExternalControl")
+              + ", LirouHub.IsBusy=" + Pergunta<bool>("LirouHub.IsBusy"));
         l.Add("Questionable: rodando=" + Pergunta<bool>("Questionable.IsRunning")
               + ", quest=" + Pergunta<string>("Questionable.GetCurrentQuestId"));
         try

@@ -14,6 +14,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly WindowSystem windows = new("LirouHub");
     private readonly MainWindow janela;
     private readonly QuestTracker rastreador;
+    private readonly PonteIpc ponte;
 
     public ModuleHost Host { get; }
     public NucleoHost Nucleo { get; }
@@ -98,6 +99,7 @@ public sealed class Plugin : IDalamudPlugin
 
         Host = new ModuleHost(pluginInterface, log);
         Nucleo = new NucleoHost(pluginInterface, framework, log, servicos, Host.PastaArquivos);
+        ponte = new PonteIpc(pluginInterface);
         rastreador = new QuestTracker(dataManager, log, pluginInterface, Nucleo, chat, clientState, objectTable);
         janela = new MainWindow(Host, rastreador, Nucleo);
         windows.AddWindow(janela);
@@ -125,6 +127,7 @@ public sealed class Plugin : IDalamudPlugin
         pi.UiBuilder.OpenConfigUi -= janela.Toggle;
         windows.RemoveAllWindows();
         rastreador.Dispose();
+        ponte.Dispose();
         Nucleo.Dispose();
         Host.Dispose();
     }

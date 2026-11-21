@@ -62,6 +62,13 @@ public sealed class MainWindow : Window
         ImGui.SameLine();
         ImGui.Checkbox("Mostrar detalhes das quests", ref mostrarDetalhes);
 
+        if (ImGui.CollapsingHeader("Movimento (diagnóstico)"))
+        {
+            foreach (var l in tracker.Sonda()) ImGui.TextWrapped(l);
+            ImGui.TextColored(Amarelo, "Mensagens do Questionable no chat:");
+            foreach (var l in tracker.MensagensDoBot()) ImGui.TextWrapped(l);
+        }
+
         if (ImGui.CollapsingHeader("Registro"))
         {
             foreach (var e in tracker.Eventos()) ImGui.TextWrapped(e);

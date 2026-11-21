@@ -20,12 +20,20 @@ public sealed class QuestAtiva
 /// Descobre quais quests o personagem tem ativas no diário e comanda o Questionable (que roda por dentro
 /// do Lirou Hub) por IPC: Start, Stop e acompanhamento do que ele está fazendo.
 /// </summary>
-public sealed unsafe class QuestTracker
+public sealed unsafe class QuestTracker : IDisposable
 {
     private readonly IDataManager data;
     private readonly IPluginLog log;
     private readonly IDalamudPluginInterface pi;
     private readonly NucleoHost nucleo;
+    private readonly IChatGui chat;
+    private readonly IClientState clientState;
+    private readonly IObjectTable objetos;
+    private readonly List<string> sonda = new();
+    private readonly List<string> chatQst = new();
+    private long ultimaSonda = -10000;
+    private System.Numerics.Vector3 posAnterior;
+    private long moveuEm;
     private readonly List<(ushort Id, string Nome, bool Msq, uint Icone, uint Genero)> catalogo = new();
     private readonly List<string> eventos = new();
     private readonly Stopwatch relogio = Stopwatch.StartNew();
@@ -33,8 +41,13 @@ public sealed unsafe class QuestTracker
     private long ultima = -10000;
     private long iniciouEm;
 
-    public QuestTracker(IDataManager data, IPluginLog log, IDalamudPluginInterface pi, NucleoHost nucleo)
+    public QuestTracker(IDataManager data, IPluginLog log, IDalamudPluginInterface pi, NucleoHost nucleo,
+        IChatGui chat, IClientState clientState, IObjectTable objetos)
     {
+        this.chat = chat;
+        this.clientState = clientState;
+        this.objetos = objetos;
+        chat.ChatMessage += m => { if (!descartado) AoChat(m.Message.ToString()); };
         this.data = data;
         this.log = log;
         this.pi = pi;
@@ -49,6 +62,70 @@ public sealed unsafe class QuestTracker
     public bool BotPronto => nucleo.QuestionablePronto;
     public bool QuestionableRodando { get; private set; }
     public string QuestIdAtual { get; private set; } = "";
+
+    private volatile bool descartado;
+    public void Dispose() => descartado = true;
+
+    private void AoChat(string t)
+    {
+        try
+        {
+            if (t.Contains("[QST") || t.Contains("Questionable"))
+                lock (chatQst)
+                {
+                    chatQst.Add($"{DateTime.Now:HH:mm:ss}  {t}");
+                    if (chatQst.Count > 25) chatQst.RemoveAt(0);
+                }
+        }
+        catch { }
+    }
+
+    public string[] MensagensDoBot() { lock (chatQst) return chatQst.ToArray(); }
+    public string[] Sonda() { lock (sonda) return sonda.ToArray(); }
+
+    private string Pergunta<T>(string nome)
+    {
+        try { return pi.GetIpcSubscriber<T>(nome).InvokeFunc()?.ToString() ?? "(vazio)"; }
+        catch (Exception ex) { return "sem resposta (" + ex.GetType().Name + ")"; }
+    }
+
+    /// <summary>Pergunta aos plugins internos como estão (só leitura) para vermos por que o bot anda ou não.</summary>
+    private void FazerSonda()
+    {
+        if (relogio.ElapsedMilliseconds - ultimaSonda < 1000) return;
+        ultimaSonda = relogio.ElapsedMilliseconds;
+        var l = new List<string>();
+        try
+        {
+            var jogador = objetos.LocalPlayer;
+            if (jogador != null)
+            {
+                var pos = jogador.Position;
+                if (System.Numerics.Vector3.Distance(pos, posAnterior) > 0.2f) moveuEm = relogio.ElapsedMilliseconds;
+                posAnterior = pos;
+                var parado = (relogio.ElapsedMilliseconds - moveuEm) / 1000;
+                l.Add($"Personagem: zona {clientState.TerritoryType}, posição {pos.X:0.0}, {pos.Y:0.0}, {pos.Z:0.0}. Parado há {parado}s.");
+            }
+        }
+        catch (Exception ex) { l.Add("Personagem: " + ex.Message); }
+
+        l.Add("vnavmesh: pronto=" + Pergunta<bool>("vnavmesh.Nav.IsReady")
+              + ", construindo=" + Pergunta<float>("vnavmesh.Nav.BuildProgress")
+              + ", andando=" + Pergunta<bool>("vnavmesh.Path.IsRunning")
+              + ", calculando=" + Pergunta<bool>("vnavmesh.SimpleMove.PathfindInProgress"));
+        l.Add("TextAdvance: controle externo=" + Pergunta<bool>("TextAdvance.IsInExternalControl")
+              + ", ocupado=" + Pergunta<bool>("TextAdvance.IsBusy"));
+        l.Add("Lifestream: ocupado=" + Pergunta<bool>("Lifestream.IsBusy"));
+        l.Add("Questionable: rodando=" + Pergunta<bool>("Questionable.IsRunning")
+              + ", quest=" + Pergunta<string>("Questionable.GetCurrentQuestId"));
+        try
+        {
+            var passo = pi.GetIpcSubscriber<object>("Questionable.GetCurrentStepData").InvokeFunc();
+            l.Add("Passo atual: " + (passo == null ? "(nenhum)" : Newtonsoft.Json.JsonConvert.SerializeObject(passo)));
+        }
+        catch (Exception ex) { l.Add("Passo atual: sem resposta (" + ex.GetType().Name + ": " + ex.Message + ")"); }
+        lock (sonda) { sonda.Clear(); sonda.AddRange(l); }
+    }
 
     public string[] Eventos() { lock (eventos) return eventos.ToArray(); }
 
@@ -112,6 +189,8 @@ public sealed unsafe class QuestTracker
             QuestIdAtual = "";
             return;
         }
+
+        FazerSonda();
 
         try { QuestionableRodando = pi.GetIpcSubscriber<bool>("Questionable.IsRunning").InvokeFunc(); }
         catch { QuestionableRodando = false; }
@@ -210,6 +289,10 @@ public sealed unsafe class QuestTracker
         foreach (var q in Ativas)
             sb.AppendLine($"   - {q.Id} | {q.Nome} | MSQ={q.Msq} | icone={q.IconeEvento} | genero={q.Genero}");
         foreach (var e in Eventos()) sb.AppendLine("   " + e);
+        sb.AppendLine("== Sonda (movimento)");
+        foreach (var e in Sonda()) sb.AppendLine("   " + e);
+        sb.AppendLine("== Mensagens do Questionable no chat");
+        foreach (var e in MensagensDoBot()) sb.AppendLine("   " + e);
         return sb.ToString();
     }
 }

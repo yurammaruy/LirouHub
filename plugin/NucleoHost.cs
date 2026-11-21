@@ -29,6 +29,7 @@ public sealed class NucleoItem
     public Situacao Estado { get; set; } = Situacao.Pendente;
     public string Msg { get; set; } = "";
     public string[] Ipcs { get; set; } = Array.Empty<string>();
+    public List<string> RecursosCopiados { get; } = new();
 
     public Assembly? Assembly { get; internal set; }
     public object? Instancia { get; internal set; }
@@ -50,6 +51,7 @@ public sealed class NucleoItem
         Estado = Situacao.Pendente;
         Msg = "";
         Ipcs = Array.Empty<string>();
+        RecursosCopiados.Clear();
     }
 }
 
@@ -124,7 +126,8 @@ public sealed class NucleoHost : IDisposable
                     log.Error(ex, "[LirouHub] Não consegui listar os plugins instalados");
                 }
 
-                foreach (var m in Itens) VerificarUm(m, ligados);
+                var vistos = new Dictionary<string, (string Modulo, long Tam)>(StringComparer.OrdinalIgnoreCase);
+                foreach (var m in Itens) VerificarUm(m, ligados, vistos);
             }
             catch (Exception ex)
             {
@@ -139,7 +142,7 @@ public sealed class NucleoHost : IDisposable
         });
     }
 
-    private void VerificarUm(NucleoItem m, List<string> ligados)
+    private void VerificarUm(NucleoItem m, List<string> ligados, Dictionary<string, (string Modulo, long Tam)> vistos)
     {
         try
         {
@@ -184,6 +187,7 @@ public sealed class NucleoHost : IDisposable
 
             // 3) Inspeção do código, sem executar nada (em um espaço descartável).
             var pastaDll = Path.GetDirectoryName(dll)!;
+            ChecarRecursos(m, pastaDll, vistos);
 
             var proprias = Directory.GetFiles(pastaDll, "*.dll")
                 .Select(f => Path.GetFileNameWithoutExtension(f)!)
@@ -497,6 +501,8 @@ public sealed class NucleoHost : IDisposable
             }
             m.Add("Classe de entrada: " + tipo.FullName);
 
+            CopiarRecursos(m, Path.GetDirectoryName(dll)!);
+
             await framework.RunOnFrameworkThread(() =>
             {
                 sandbox.PrepararPara(m.Nome, m.Add);
@@ -614,6 +620,13 @@ public sealed class NucleoHost : IDisposable
                         .Select(x => x.Name)
                         .Take(30);
                     res.Add($"[classe] {t.FullName}: {string.Join(", ", metodos)}");
+
+                    foreach (var campo in t.GetFields(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public
+                                                      | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+                    {
+                        if (!campo.FieldType.Name.Contains("CallGate", StringComparison.OrdinalIgnoreCase)) continue;
+                        res.Add($"[campo] {t.Name}.{campo.Name}: {NomeTipo(campo.FieldType)}");
+                    }
                 }
 
                 foreach (var f in t.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
@@ -640,6 +653,15 @@ public sealed class NucleoHost : IDisposable
 
         foreach (var s in textos.Take(200)) res.Add("[nome] " + s);
         return res.ToArray();
+    }
+
+    private static string NomeTipo(Type t)
+    {
+        if (!t.IsGenericType) return t.Name;
+        var nome = t.Name;
+        var i = nome.IndexOf('`');
+        if (i > 0) nome = nome[..i];
+        return nome + "<" + string.Join(", ", t.GetGenericArguments().Select(NomeTipo)) + ">";
     }
 
     private static List<string> TextosDoTipo(Type t, string nome)
@@ -678,6 +700,124 @@ public sealed class NucleoHost : IDisposable
             }
         }
         return achados;
+    }
+
+    // ------------------------------------------------------------ arquivos de recursos
+    // Muitos plugins leem arquivos "ao lado da DLL" (ex.: Resources\I18N.xml) usando a pasta de instalação
+    // que o Dalamud informa. Como eles rodam dentro do Lirou Hub, essa pasta é a do Hub: copiamos para lá.
+
+    private static IEnumerable<(string Rel, string Full)> ListarRecursos(string pastaModulo)
+    {
+        var proibidas = new[] { ".dll", ".pdb", ".json", ".zip", ".deps" };
+        foreach (var arq in Directory.GetFiles(pastaModulo))
+        {
+            if (proibidas.Contains(Path.GetExtension(arq), StringComparer.OrdinalIgnoreCase)) continue;
+            yield return (Path.GetFileName(arq), arq);
+        }
+        foreach (var dir in Directory.GetDirectories(pastaModulo))
+        {
+            var nome = Path.GetFileName(dir);
+            if (nome.Equals("runtimes", StringComparison.OrdinalIgnoreCase)
+                || nome.Equals("images", StringComparison.OrdinalIgnoreCase)) continue;
+            foreach (var arq in Directory.GetFiles(dir, "*", SearchOption.AllDirectories))
+                yield return (Path.GetRelativePath(pastaModulo, arq), arq);
+        }
+    }
+
+    private void ChecarRecursos(NucleoItem m, string pastaModulo, Dictionary<string, (string Modulo, long Tam)> vistos)
+    {
+        try
+        {
+            var arquivos = ListarRecursos(pastaModulo).ToList();
+            if (arquivos.Count == 0) return;
+
+            var conflitos = new List<string>();
+            foreach (var (rel, full) in arquivos)
+            {
+                var tam = new FileInfo(full).Length;
+                if (vistos.TryGetValue(rel, out var outro))
+                {
+                    if (outro.Tam != tam) conflitos.Add($"{rel} (também em {outro.Modulo})");
+                }
+                else
+                {
+                    vistos[rel] = (m.Nome, tam);
+                }
+            }
+
+            m.AddAchado(Nivel.Ok, $"{arquivos.Count} arquivos de recursos serão copiados para a pasta do Hub (alguns plugins leem arquivos ao lado da DLL).");
+            if (conflitos.Count > 0)
+                m.AddAchado(Nivel.Aviso, "Recursos com o mesmo caminho de outro plugin e conteúdo diferente (vale o do primeiro a ligar): "
+                                         + string.Join("; ", conflitos.Take(5)));
+
+            var raiz = pi.AssemblyLocation.DirectoryName;
+            if (string.IsNullOrEmpty(raiz))
+            {
+                m.AddAchado(Nivel.Erro, "Não achei a pasta de instalação do Lirou Hub para copiar os recursos.");
+                return;
+            }
+            try
+            {
+                var teste = Path.Combine(raiz, ".lirouhub-teste");
+                File.WriteAllText(teste, "x");
+                File.Delete(teste);
+            }
+            catch (Exception ex)
+            {
+                m.AddAchado(Nivel.Erro, "A pasta de instalação do Lirou Hub não aceita gravação: " + ex.Message);
+            }
+        }
+        catch (Exception ex)
+        {
+            m.AddAchado(Nivel.Aviso, "Não consegui listar os recursos: " + ex.Message);
+        }
+    }
+
+    private void CopiarRecursos(NucleoItem m, string pastaModulo)
+    {
+        var raiz = pi.AssemblyLocation.DirectoryName;
+        if (string.IsNullOrEmpty(raiz))
+        {
+            m.Add("Não achei a pasta de instalação do Hub: recursos não copiados.");
+            return;
+        }
+
+        var copiados = 0;
+        var iguais = 0;
+        var conflitos = new List<string>();
+        foreach (var (rel, full) in ListarRecursos(pastaModulo))
+        {
+            var destino = Path.Combine(raiz, rel);
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(destino)!);
+                if (File.Exists(destino))
+                {
+                    if (new FileInfo(destino).Length == new FileInfo(full).Length) iguais++;
+                    else conflitos.Add(rel);
+                    continue;
+                }
+                File.Copy(full, destino);
+                m.RecursosCopiados.Add(destino);
+                copiados++;
+            }
+            catch (Exception ex)
+            {
+                m.Add($"Não consegui copiar {rel}: {ex.Message}");
+            }
+        }
+
+        m.Add($"Recursos na pasta do Hub: {copiados} copiados, {iguais} já existiam"
+              + (conflitos.Count > 0 ? $", {conflitos.Count} em conflito (mantido o anterior): {string.Join(", ", conflitos.Take(3))}" : "") + ".");
+    }
+
+    private static void LimparRecursos(NucleoItem m)
+    {
+        foreach (var f in m.RecursosCopiados)
+        {
+            try { File.Delete(f); } catch { /* em uso: fica */ }
+        }
+        m.RecursosCopiados.Clear();
     }
 
     /// <summary>Chama o LoadAsync de um plugin no formato novo (IAsyncDalamudPlugin).</summary>
@@ -732,6 +872,7 @@ public sealed class NucleoHost : IDisposable
         catch (Exception ex) { log.Error(ex, "[LirouHub] Erro ao desligar " + m.Nome); }
         try { m.Contexto?.Unload(); } catch { /* ignora */ }
         m.Contexto = null;
+        LimparRecursos(m);
     }
 
     /// <summary>Usado só quando o próprio Lirou Hub é descarregado (já está na thread do jogo).</summary>
@@ -749,6 +890,7 @@ public sealed class NucleoHost : IDisposable
         catch (Exception ex) { log.Error(ex, "[LirouHub] Erro ao desligar " + m.Nome); }
         try { m.Contexto?.Unload(); } catch { /* ignora */ }
         m.Contexto = null;
+        LimparRecursos(m);
     }
 
     public string Relatorio()

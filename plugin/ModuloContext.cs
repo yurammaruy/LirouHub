@@ -15,13 +15,34 @@ internal sealed class ModuloContext : AssemblyLoadContext
         hospedeiro = GetLoadContext(typeof(ModuloContext).Assembly)!;
     }
 
+    // Bibliotecas que o Dalamud fornece. Se o zip do plugin trouxer cópia própria, ela é ignorada:
+    // uma segunda cópia do Dalamud faria o plugin implementar uma IDalamudPlugin "de outro Dalamud".
+    private static readonly string[] Compartilhadas =
+    {
+        "FFXIVClientStructs", "InteropGenerator.Runtime", "Lumina", "Lumina.Excel",
+        "Newtonsoft.Json", "Serilog", "CheapLoc", "ImGuiScene",
+    };
+
+    internal static bool Compartilhada(string? nome)
+        => !string.IsNullOrEmpty(nome)
+           && (nome.StartsWith("Dalamud", StringComparison.OrdinalIgnoreCase)
+               || nome.StartsWith("SharpDX", StringComparison.OrdinalIgnoreCase)
+               || Compartilhadas.Contains(nome, StringComparer.OrdinalIgnoreCase));
+
     protected override Assembly? Load(AssemblyName assemblyName)
     {
-        // 1) O que o hospedeiro já tem (Dalamud, ImGui, Newtonsoft...) é compartilhado.
+        // 1) O que o hospedeiro já tem é compartilhado.
         foreach (var a in hospedeiro.Assemblies)
         {
             if (string.Equals(a.GetName().Name, assemblyName.Name, StringComparison.OrdinalIgnoreCase))
                 return a;
+        }
+
+        // 1b) Bibliotecas do Dalamud: sempre as do Dalamud, nunca a cópia do zip.
+        if (Compartilhada(assemblyName.Name))
+        {
+            try { return hospedeiro.LoadFromAssemblyName(assemblyName); }
+            catch { /* o Dalamud não tem esta: usa a do plugin */ }
         }
 
         // 2) O que veio dentro do zip do plugin.

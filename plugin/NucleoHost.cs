@@ -214,9 +214,18 @@ public sealed class NucleoHost : IDisposable
                 var tipo = tipos.FirstOrDefault(t => t.IsClass && !t.IsAbstract && typeof(IDalamudPlugin).IsAssignableFrom(t));
                 if (tipo == null)
                 {
-                    m.AddAchado(Nivel.Erro, "Não achei a classe de entrada (IDalamudPlugin). " +
-                                            DiagnosticoEntrada(tipos, pastaDll, m.Nome));
-                    return;
+                    var alt = LocalizarEntrada(ctx, dll, pastaDll);
+                    if (alt != null)
+                    {
+                        tipo = alt.Tipo;
+                        m.AddAchado(Nivel.Aviso, $"A classe de entrada está em {Path.GetFileName(alt.Dll)}, não em {m.Nome}.dll. O Hub vai usá-la.");
+                    }
+                    else
+                    {
+                        m.AddAchado(Nivel.Erro, "Não achei a classe de entrada (IDalamudPlugin) em nenhuma DLL da pasta. " +
+                                                DiagnosticoEntrada(tipos, pastaDll, m.Nome));
+                        return;
+                    }
                 }
 
                 var faltam = PecasFaltando(tipo);
@@ -270,6 +279,33 @@ public sealed class NucleoHost : IDisposable
             m.AddAchado(Nivel.Ok, "Todas as bibliotecas necessárias estão disponíveis.");
     }
 
+    private sealed record Entrada(Assembly Asm, Type Tipo, string Dll);
+
+    /// <summary>Procura a classe de entrada (IDalamudPlugin) nas outras DLLs da pasta do plugin.</summary>
+    private static Entrada? LocalizarEntrada(ModuloContext ctx, string dllPrincipal, string pasta)
+    {
+        foreach (var f in Directory.GetFiles(pasta, "*.dll"))
+        {
+            if (string.Equals(f, dllPrincipal, StringComparison.OrdinalIgnoreCase)) continue;
+            var nome = Path.GetFileNameWithoutExtension(f) ?? "";
+            if (ModuloContext.Compartilhada(nome) || nome.StartsWith("System.", StringComparison.OrdinalIgnoreCase)
+                || nome.StartsWith("Microsoft.", StringComparison.OrdinalIgnoreCase)) continue;
+
+            try
+            {
+                var asm = ctx.LoadFromAssemblyPath(f);
+                Type[] tipos;
+                try { tipos = asm.GetTypes(); }
+                catch (ReflectionTypeLoadException r) { tipos = r.Types.Where(t => t != null).ToArray()!; }
+
+                var tipo = tipos.FirstOrDefault(t => t.IsClass && !t.IsAbstract && typeof(IDalamudPlugin).IsAssignableFrom(t));
+                if (tipo != null) return new Entrada(asm, tipo, f);
+            }
+            catch { /* DLL nativa ou ilegível: ignora */ }
+        }
+        return null;
+    }
+
     /// <summary>Explica por que nenhuma classe de entrada foi reconhecida.</summary>
     private static string DiagnosticoEntrada(Type[] tipos, string pastaDll, string nome)
     {
@@ -286,9 +322,22 @@ public sealed class NucleoHost : IDisposable
             }
             else
             {
-                var dlls = Directory.GetFiles(pastaDll, "*.dll").Select(Path.GetFileName).Take(20);
                 sb.Append($"Nenhuma classe de {nome}.dll implementa IDalamudPlugin ({tipos.Length} tipos). ");
-                sb.Append("A entrada pode estar em outra DLL da pasta: " + string.Join(", ", dlls) + ".");
+                var cand = tipos
+                    .Where(t => t.Name.Contains("Plugin", StringComparison.OrdinalIgnoreCase))
+                    .Take(12)
+                    .Select(t =>
+                    {
+                        string ifs;
+                        try { ifs = string.Join("/", t.GetInterfaces().Select(i => i.Name).Take(8)); }
+                        catch (Exception ex) { ifs = "?" + ex.GetType().Name; }
+                        return $"{t.FullName} (base {t.BaseType?.Name}; interfaces {ifs})";
+                    })
+                    .ToList();
+                sb.Append(cand.Count > 0
+                    ? "Classes com 'Plugin' no nome: " + string.Join(" | ", cand) + ". "
+                    : "Nenhuma classe tem 'Plugin' no nome. ");
+                sb.Append("IDalamudPlugin do Hub vem de: " + typeof(IDalamudPlugin).Assembly.Location + ".");
             }
         }
         catch (Exception ex)
@@ -420,9 +469,17 @@ public sealed class NucleoHost : IDisposable
             m.Ipcs = ProcurarIpc(tipos, m.Nome);
             m.Add($"IPCs encontradas no código: {m.Ipcs.Length}");
 
-            var tipo = tipos.FirstOrDefault(t => t.IsClass && !t.IsAbstract && typeof(IDalamudPlugin).IsAssignableFrom(t))
-                ?? throw new Exception("Não achei a classe de entrada (IDalamudPlugin) dentro da DLL. " +
-                                       DiagnosticoEntrada(tipos, Path.GetDirectoryName(dll)!, m.Nome));
+            var tipo = tipos.FirstOrDefault(t => t.IsClass && !t.IsAbstract && typeof(IDalamudPlugin).IsAssignableFrom(t));
+            if (tipo == null)
+            {
+                var alt = LocalizarEntrada(ctx, dll, Path.GetDirectoryName(dll)!);
+                if (alt == null)
+                    throw new Exception("Não achei a classe de entrada (IDalamudPlugin) em nenhuma DLL da pasta. " +
+                                        DiagnosticoEntrada(tipos, Path.GetDirectoryName(dll)!, m.Nome));
+                m.Add($"A classe de entrada está em {Path.GetFileName(alt.Dll)}, não em {m.Nome}.dll.");
+                m.Assembly = alt.Asm;
+                tipo = alt.Tipo;
+            }
             m.Add("Classe de entrada: " + tipo.FullName);
 
             await framework.RunOnFrameworkThread(() =>

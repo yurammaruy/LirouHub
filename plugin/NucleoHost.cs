@@ -1,8 +1,10 @@
+using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Runtime.Loader;
 using System.Text;
 using System.Text.Json;
+using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 
@@ -75,6 +77,12 @@ public sealed class NucleoHost : IDisposable
     private readonly ConfigSandbox sandbox;
     private volatile bool ocupado;
 
+    // Janelas dos plugins internos (para escondê-las: a única interface visível é a do Lirou Hub).
+    private readonly object travaJanelas = new();
+    private readonly HashSet<WindowSystem> sistemas = new();
+    private readonly Stopwatch relogioJanelas = Stopwatch.StartNew();
+    private long ultimaBusca = -10000;
+
     public NucleoHost(IDalamudPluginInterface pi, IFramework framework, IPluginLog log,
         Dictionary<Type, object> servicos, string raizArquivos)
     {
@@ -100,6 +108,12 @@ public sealed class NucleoHost : IDisposable
     public bool Ligado { get; private set; }
     public bool VerificacaoFeita { get; private set; }
     public bool PodeLigar => VerificacaoFeita && !Itens.Any(i => i.TemErro);
+
+    /// <summary>O Questionable está ligado por dentro do Hub.</summary>
+    public bool QuestionablePronto => Itens.Any(i => i.Nome == "Questionable" && i.Estado == Situacao.Ok);
+
+    public int JanelasOcultadas { get; private set; }
+    public int SistemasDeJanelas { get { lock (travaJanelas) return sistemas.Count; } }
 
     // ---------------------------------------------------------------- conferência antes de ligar
 
@@ -444,6 +458,7 @@ public sealed class NucleoHost : IDisposable
             {
                 foreach (var m in Itens.Reverse())
                     await DescarregarAsync(m);
+                lock (travaJanelas) sistemas.Clear();
                 foreach (var m in Itens)
                 {
                     m.Estado = Situacao.Pendente;
@@ -700,6 +715,84 @@ public sealed class NucleoHost : IDisposable
             }
         }
         return achados;
+    }
+
+    // ------------------------------------------------------------ janelas dos plugins internos
+
+    /// <summary>
+    /// Fecha as janelas dos plugins internos. Chamar a cada quadro, na thread do jogo.
+    /// Descobre os sistemas de janelas (WindowSystem) pelos assinantes do Draw do Dalamud e pelos campos
+    /// dos próprios plugins, e mantém fechadas todas as janelas que não são do Lirou Hub.
+    /// </summary>
+    public void OcultarJanelas()
+    {
+        if (!Itens.Any(i => i.Instancia != null)) return;
+
+        lock (travaJanelas)
+        {
+            if (relogioJanelas.ElapsedMilliseconds - ultimaBusca > 2000)
+            {
+                ultimaBusca = relogioJanelas.ElapsedMilliseconds;
+                DescobrirJanelas();
+            }
+
+            foreach (var ws in sistemas)
+            {
+                if (ws.Namespace == "LirouHub") continue;
+                try
+                {
+                    foreach (var w in ws.Windows)
+                    {
+                        if (!w.IsOpen) continue;
+                        w.IsOpen = false;
+                        JanelasOcultadas++;
+                    }
+                }
+                catch { /* janela em estado estranho: ignora */ }
+            }
+        }
+    }
+
+    private void DescobrirJanelas()
+    {
+        // 1) Quem assina o Draw do UiBuilder (os plugins internos usam o mesmo).
+        try
+        {
+            var ui = pi.UiBuilder;
+            foreach (var f in ui.GetType().GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+            {
+                if (!typeof(Delegate).IsAssignableFrom(f.FieldType)) continue;
+                if (f.GetValue(ui) is not Delegate d) continue;
+                foreach (var h in d.GetInvocationList())
+                    if (h.Target is WindowSystem ws) sistemas.Add(ws);
+            }
+        }
+        catch { /* estrutura interna diferente: usa só o passo 2 */ }
+
+        // 2) Campos dos plugins (WindowSystem direto ou dentro do provedor de serviços).
+        foreach (var m in Itens)
+        {
+            var inst = m.Instancia;
+            if (inst == null) continue;
+            try
+            {
+                foreach (var f in inst.GetType().GetFields(BindingFlags.Instance | BindingFlags.Static
+                                                           | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    object? v;
+                    try { v = f.GetValue(f.IsStatic ? null : inst); }
+                    catch { continue; }
+
+                    if (v is WindowSystem ws) sistemas.Add(ws);
+                    else if (v is IServiceProvider sp)
+                    {
+                        try { if (sp.GetService(typeof(WindowSystem)) is WindowSystem w2) sistemas.Add(w2); }
+                        catch { /* serviço não registrado */ }
+                    }
+                }
+            }
+            catch { /* ignora */ }
+        }
     }
 
     // ------------------------------------------------------------ arquivos de recursos

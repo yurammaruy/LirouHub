@@ -184,6 +184,15 @@ public sealed class NucleoHost : IDisposable
 
             // 3) Inspeção do código, sem executar nada (em um espaço descartável).
             var pastaDll = Path.GetDirectoryName(dll)!;
+
+            var proprias = Directory.GetFiles(pastaDll, "*.dll")
+                .Select(f => Path.GetFileNameWithoutExtension(f)!)
+                .Where(x => ModuloContext.Compartilhada(x))
+                .ToList();
+            if (proprias.Count > 0)
+                m.AddAchado(Nivel.Aviso, "O zip traz cópias próprias de: " + string.Join(", ", proprias) +
+                                         ". O Hub as ignora e usa as do Dalamud.");
+
             var ctx = new ModuloContext(m.Nome + ".inspecao", pastaDll);
             try
             {
@@ -205,7 +214,8 @@ public sealed class NucleoHost : IDisposable
                 var tipo = tipos.FirstOrDefault(t => t.IsClass && !t.IsAbstract && typeof(IDalamudPlugin).IsAssignableFrom(t));
                 if (tipo == null)
                 {
-                    m.AddAchado(Nivel.Erro, "Não achei a classe de entrada (IDalamudPlugin).");
+                    m.AddAchado(Nivel.Erro, "Não achei a classe de entrada (IDalamudPlugin). " +
+                                            DiagnosticoEntrada(tipos, pastaDll, m.Nome));
                     return;
                 }
 
@@ -258,6 +268,34 @@ public sealed class NucleoHost : IDisposable
             m.AddAchado(Nivel.Aviso, "Versões diferentes das bibliotecas: " + string.Join("; ", versoes));
         if (faltando.Count == 0 && versoes.Count == 0)
             m.AddAchado(Nivel.Ok, "Todas as bibliotecas necessárias estão disponíveis.");
+    }
+
+    /// <summary>Explica por que nenhuma classe de entrada foi reconhecida.</summary>
+    private static string DiagnosticoEntrada(Type[] tipos, string pastaDll, string nome)
+    {
+        var sb = new StringBuilder();
+        try
+        {
+            var porNome = tipos
+                .Where(t => t.IsClass && !t.IsAbstract && t.GetInterfaces().Any(i => i.Name == "IDalamudPlugin"))
+                .ToList();
+            if (porNome.Count > 0)
+            {
+                var onde = porNome[0].GetInterfaces().First(i => i.Name == "IDalamudPlugin").Assembly.Location;
+                sb.Append($"Achei {string.Join(", ", porNome.Select(t => t.FullName))}, mas a IDalamudPlugin dele vem de outra cópia do Dalamud ({onde}).");
+            }
+            else
+            {
+                var dlls = Directory.GetFiles(pastaDll, "*.dll").Select(Path.GetFileName).Take(20);
+                sb.Append($"Nenhuma classe de {nome}.dll implementa IDalamudPlugin ({tipos.Length} tipos). ");
+                sb.Append("A entrada pode estar em outra DLL da pasta: " + string.Join(", ", dlls) + ".");
+            }
+        }
+        catch (Exception ex)
+        {
+            sb.Append("(não consegui detalhar: " + ex.Message + ")");
+        }
+        return sb.ToString();
     }
 
     private static bool TemPluginService(MemberInfo mem)
@@ -383,7 +421,8 @@ public sealed class NucleoHost : IDisposable
             m.Add($"IPCs encontradas no código: {m.Ipcs.Length}");
 
             var tipo = tipos.FirstOrDefault(t => t.IsClass && !t.IsAbstract && typeof(IDalamudPlugin).IsAssignableFrom(t))
-                ?? throw new Exception("Não achei a classe de entrada (IDalamudPlugin) dentro da DLL.");
+                ?? throw new Exception("Não achei a classe de entrada (IDalamudPlugin) dentro da DLL. " +
+                                       DiagnosticoEntrada(tipos, Path.GetDirectoryName(dll)!, m.Nome));
             m.Add("Classe de entrada: " + tipo.FullName);
 
             await framework.RunOnFrameworkThread(() =>

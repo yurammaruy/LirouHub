@@ -32,6 +32,8 @@ public sealed unsafe class QuestTracker : IDisposable
     private readonly List<string> sonda = new();
     private readonly List<string> chatQst = new();
     private long ultimaSonda = -10000;
+    private long ultimoPonto = -10000;
+    private readonly List<string> historicoMalha = new();
     private System.Numerics.Vector3 posAnterior;
     private long moveuEm;
     private readonly List<(ushort Id, string Nome, bool Msq, uint Icone, uint Genero)> catalogo = new();
@@ -109,6 +111,18 @@ public sealed unsafe class QuestTracker : IDisposable
         }
         catch (Exception ex) { l.Add("Personagem: " + ex.Message); }
 
+        try
+        {
+            var pr = pi.GetIpcSubscriber<float>("vnavmesh.Nav.BuildProgress").InvokeFunc();
+            if (relogio.ElapsedMilliseconds - ultimoPonto > 5000)
+            {
+                ultimoPonto = relogio.ElapsedMilliseconds;
+                historicoMalha.Add($"{DateTime.Now:HH:mm:ss}={pr:0.00}");
+                if (historicoMalha.Count > 8) historicoMalha.RemoveAt(0);
+            }
+        }
+        catch { }
+        l.Add("Malha (progresso a cada 5s): " + string.Join("  ", historicoMalha));
         l.Add("vnavmesh: pronto=" + Pergunta<bool>("vnavmesh.Nav.IsReady")
               + ", construindo=" + Pergunta<float>("vnavmesh.Nav.BuildProgress")
               + ", andando=" + Pergunta<bool>("vnavmesh.Path.IsRunning")

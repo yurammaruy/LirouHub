@@ -105,6 +105,7 @@ public sealed class NucleoHost : IDisposable
             new NucleoItem("Lifestream", "NightmareXIV"),
             new NucleoItem("BossMod", "Puni.sh (veyn)", opcional: true),
             new NucleoItem("RotationSolver", "Combat Reborn", opcional: true),
+            new NucleoItem("WrathCombo", "Puni.sh (ment)", opcional: true),
             new NucleoItem("Questionable", "Puni.sh (ment)"),
         };
     }
@@ -550,6 +551,19 @@ public sealed class NucleoHost : IDisposable
             m.Estado = Situacao.Erro;
             m.Msg = ex.Message;
             m.Add("ERRO: " + ex);
+            try
+            {
+                var pastaErro = ModuleHost.PastaAtual(Path.Combine(raizArquivos, ModuleHost.Segura(m.Repo), ModuleHost.Segura(m.Nome)));
+                if (pastaErro != null && Directory.Exists(pastaErro))
+                {
+                    var arqs = Directory.EnumerateFileSystemEntries(pastaErro, "*", SearchOption.TopDirectoryOnly)
+                        .Select(f => Path.GetFileName(f) + (Directory.Exists(f) ? "/" : ""))
+                        .Where(f => !f.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                        .Take(60);
+                    m.Add("Itens (não DLL) na pasta do plugin: " + string.Join(", ", arqs));
+                }
+            }
+            catch { /* só diagnóstico */ }
             log.Error(ex, "[LirouHub] Falha ao ligar " + m.Nome);
             try { await DescarregarAsync(m); } catch { /* ignora */ }
         }

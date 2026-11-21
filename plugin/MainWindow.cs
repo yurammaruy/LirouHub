@@ -15,6 +15,7 @@ public sealed class MainWindow : Window
     private readonly ModuleHost host;
     private readonly QuestTracker tracker;
     private readonly NucleoHost nucleo;
+    public Action? AbrirChecagem { get; set; }
     private bool mostrarDetalhes;
     private bool ocultarJanelas = true;
 
@@ -178,6 +179,8 @@ public sealed class MainWindow : Window
             if (nucleo.Ocupado) ImGui.BeginDisabled();
             if (ImGui.Button("Desligar núcleo###nucdesligar")) nucleo.Desligar();
             if (nucleo.Ocupado) ImGui.EndDisabled();
+            ImGui.SameLine();
+            if (ImGui.Button("Abrir checagem###nucchecagem")) AbrirChecagem?.Invoke();
         }
 
         ImGui.Checkbox("Ocultar as janelas dos plugins internos###nucocultar", ref ocultarJanelas);

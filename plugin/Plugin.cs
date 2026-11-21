@@ -15,6 +15,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly MainWindow janela;
     private readonly QuestTracker rastreador;
     private readonly PonteIpc ponte;
+    private readonly ChecagemWindow checagem;
+    private bool checagemAberta;
 
     public ModuleHost Host { get; }
     public NucleoHost Nucleo { get; }
@@ -102,9 +104,12 @@ public sealed class Plugin : IDalamudPlugin
         ponte = new PonteIpc(pluginInterface);
         rastreador = new QuestTracker(dataManager, log, pluginInterface, Nucleo, chat, clientState, objectTable);
         janela = new MainWindow(Host, rastreador, Nucleo);
+        checagem = new ChecagemWindow(pluginInterface, Nucleo);
+        janela.AbrirChecagem = () => checagem.IsOpen = true;
         windows.AddWindow(janela);
+        windows.AddWindow(checagem);
 
-        pi.UiBuilder.Draw += windows.Draw;
+        pi.UiBuilder.Draw += Desenhar;
         pi.UiBuilder.OpenMainUi += janela.Toggle;
         pi.UiBuilder.OpenConfigUi += janela.Toggle;
 
@@ -117,12 +122,20 @@ public sealed class Plugin : IDalamudPlugin
         Host.Iniciar();
     }
 
+    private void Desenhar()
+    {
+        // Ao ligar o núcleo, a tela de checagem abre sozinha (uma vez por ligação).
+        if (Nucleo.Ligado && !checagemAberta) { checagemAberta = true; checagem.IsOpen = true; }
+        if (!Nucleo.Ligado) checagemAberta = false;
+        windows.Draw();
+    }
+
     private void OnComando(string command, string args) => janela.Toggle();
 
     public void Dispose()
     {
         commands.RemoveHandler(Comando);
-        pi.UiBuilder.Draw -= windows.Draw;
+        pi.UiBuilder.Draw -= Desenhar;
         pi.UiBuilder.OpenMainUi -= janela.Toggle;
         pi.UiBuilder.OpenConfigUi -= janela.Toggle;
         windows.RemoveAllWindows();

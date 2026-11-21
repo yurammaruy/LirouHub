@@ -90,7 +90,7 @@ public sealed class ModuleHost : IDisposable
     private static HttpClient CriarHttp()
     {
         var c = new HttpClient { Timeout = TimeSpan.FromSeconds(120) };
-        c.DefaultRequestHeaders.UserAgent.ParseAdd("LirouHub/0.0.0.18");
+        c.DefaultRequestHeaders.UserAgent.ParseAdd("LirouHub/0.0.0.19");
         return c;
     }
 

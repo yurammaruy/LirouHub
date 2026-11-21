@@ -90,7 +90,7 @@ public sealed class ModuleHost : IDisposable
     private static HttpClient CriarHttp()
     {
         var c = new HttpClient { Timeout = TimeSpan.FromSeconds(120) };
-        c.DefaultRequestHeaders.UserAgent.ParseAdd("LirouHub/0.0.0.8");
+        c.DefaultRequestHeaders.UserAgent.ParseAdd("LirouHub/0.0.0.9");
         return c;
     }
 
@@ -274,12 +274,20 @@ public sealed class ModuleHost : IDisposable
                     aviso += $" (não achei {item.InternalName}.dll; DLLs: {string.Join(", ", dlls.Take(5))})";
             }
 
-            // Guarda os arquivos prontos para a próxima etapa.
-            var atual = Path.Combine(pasta, "atual");
-            if (Directory.Exists(atual)) Directory.Delete(atual, true);
-            ZipFile.ExtractToDirectory(zip, atual, true);
-            if (Directory.GetFiles(atual, "*.dll", SearchOption.AllDirectories).Length == 0)
+            // Guarda os arquivos numa pasta NOVA a cada verificação. Nunca apagamos nem sobrescrevemos a pasta
+            // anterior antes de extrair: o Windows trava DLLs de plugins já carregados nesta sessão do jogo.
+            var nova = Path.Combine(pasta, "v_" + DateTime.Now.ToString("yyyyMMddHHmmssfff"));
+            ZipFile.ExtractToDirectory(zip, nova, true);
+            if (Directory.GetFiles(nova, "*.dll", SearchOption.AllDirectories).Length == 0)
                 throw new Exception("Extraí o zip, mas não encontrei DLLs na pasta.");
+
+            // Limpeza das versões antigas: só o que o Windows deixar apagar; o resto fica para a próxima vez.
+            foreach (var velha in Directory.GetDirectories(pasta).Where(d =>
+                         d != nova && (Path.GetFileName(d).StartsWith("v_") || Path.GetFileName(d) == "atual")))
+            {
+                try { Directory.Delete(velha, true); }
+                catch { /* em uso: ignora */ }
+            }
 
             item.Estado = Situacao.Ok;
             item.Msg = $"{total} arquivos, {item.Bytes / 1024} KB{aviso}";
@@ -299,6 +307,18 @@ public sealed class ModuleHost : IDisposable
 
     private static string Texto(JsonElement el, string nome)
         => el.TryGetProperty(nome, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+
+    /// <summary>A pasta de arquivos mais recente de um plugin (v_data-hora), ou a antiga "atual".</summary>
+    internal static string? PastaAtual(string pastaDoPlugin)
+    {
+        if (!Directory.Exists(pastaDoPlugin)) return null;
+        var nova = Directory.GetDirectories(pastaDoPlugin, "v_*")
+            .OrderBy(d => d, StringComparer.Ordinal)
+            .LastOrDefault();
+        if (nova != null) return nova;
+        var legado = Path.Combine(pastaDoPlugin, "atual");
+        return Directory.Exists(legado) ? legado : null;
+    }
 
     internal static string Segura(string s)
         => new string(s.Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());

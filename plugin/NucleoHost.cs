@@ -31,7 +31,7 @@ public sealed class NucleoItem
     public string[] Ipcs { get; set; } = Array.Empty<string>();
 
     public Assembly? Assembly { get; internal set; }
-    public IDalamudPlugin? Instancia { get; internal set; }
+    public object? Instancia { get; internal set; }
     internal ModuloContext? Contexto { get; set; }
 
     public void Add(string t) { lock (linhas) linhas.Add($"{DateTime.Now:HH:mm:ss}  {t}"); }
@@ -211,7 +211,7 @@ public sealed class NucleoHost : IDisposable
                     return;
                 }
 
-                var tipo = tipos.FirstOrDefault(t => t.IsClass && !t.IsAbstract && typeof(IDalamudPlugin).IsAssignableFrom(t));
+                var tipo = tipos.FirstOrDefault(EhEntrada);
                 if (tipo == null)
                 {
                     var alt = LocalizarEntrada(ctx, dll, pastaDll);
@@ -227,6 +227,9 @@ public sealed class NucleoHost : IDisposable
                         return;
                     }
                 }
+
+                if (!typeof(IDalamudPlugin).IsAssignableFrom(tipo))
+                    m.AddAchado(Nivel.Ok, "Plugin no formato novo (IAsyncDalamudPlugin): o Hub chama o LoadAsync dele ao ligar.");
 
                 var faltam = PecasFaltando(tipo);
                 if (faltam.Count == 0)
@@ -279,6 +282,18 @@ public sealed class NucleoHost : IDisposable
             m.AddAchado(Nivel.Ok, "Todas as bibliotecas necessárias estão disponíveis.");
     }
 
+    /// <summary>Classe de entrada de um plugin: formato antigo (IDalamudPlugin) ou novo (IAsyncDalamudPlugin).</summary>
+    private static bool EhEntrada(Type t)
+    {
+        if (!t.IsClass || t.IsAbstract) return false;
+        try
+        {
+            return typeof(IDalamudPlugin).IsAssignableFrom(t)
+                   || t.GetInterfaces().Any(i => i.Name == "IAsyncDalamudPlugin");
+        }
+        catch { return false; }
+    }
+
     private sealed record Entrada(Assembly Asm, Type Tipo, string Dll);
 
     /// <summary>Procura a classe de entrada (IDalamudPlugin) nas outras DLLs da pasta do plugin.</summary>
@@ -298,7 +313,7 @@ public sealed class NucleoHost : IDisposable
                 try { tipos = asm.GetTypes(); }
                 catch (ReflectionTypeLoadException r) { tipos = r.Types.Where(t => t != null).ToArray()!; }
 
-                var tipo = tipos.FirstOrDefault(t => t.IsClass && !t.IsAbstract && typeof(IDalamudPlugin).IsAssignableFrom(t));
+                var tipo = tipos.FirstOrDefault(EhEntrada);
                 if (tipo != null) return new Entrada(asm, tipo, f);
             }
             catch { /* DLL nativa ou ilegível: ignora */ }
@@ -424,7 +439,7 @@ public sealed class NucleoHost : IDisposable
             try
             {
                 foreach (var m in Itens.Reverse())
-                    await framework.RunOnFrameworkThread(() => DescarregarAgora(m));
+                    await DescarregarAsync(m);
                 foreach (var m in Itens)
                 {
                     m.Estado = Situacao.Pendente;
@@ -469,7 +484,7 @@ public sealed class NucleoHost : IDisposable
             m.Ipcs = ProcurarIpc(tipos, m.Nome);
             m.Add($"IPCs encontradas no código: {m.Ipcs.Length}");
 
-            var tipo = tipos.FirstOrDefault(t => t.IsClass && !t.IsAbstract && typeof(IDalamudPlugin).IsAssignableFrom(t));
+            var tipo = tipos.FirstOrDefault(EhEntrada);
             if (tipo == null)
             {
                 var alt = LocalizarEntrada(ctx, dll, Path.GetDirectoryName(dll)!);
@@ -486,8 +501,12 @@ public sealed class NucleoHost : IDisposable
             {
                 sandbox.PrepararPara(m.Nome, m.Add);
                 Instanciar(m, tipo);
-                sandbox.GuardarDe(m.Nome, m.Add);
             });
+
+            // Formato novo: depois do construtor o Dalamud chama LoadAsync (fora da thread do jogo, até 60 s).
+            if (m.Instancia is not IDalamudPlugin) await ChamarLoadAsync(m);
+
+            await framework.RunOnFrameworkThread(() => sandbox.GuardarDe(m.Nome, m.Add));
 
             m.Estado = Situacao.Ok;
             m.Msg = "Ligado.";
@@ -499,7 +518,7 @@ public sealed class NucleoHost : IDisposable
             m.Msg = ex.Message;
             m.Add("ERRO: " + ex);
             log.Error(ex, "[LirouHub] Falha ao ligar " + m.Nome);
-            try { await framework.RunOnFrameworkThread(() => DescarregarAgora(m)); } catch { /* ignora */ }
+            try { await DescarregarAsync(m); } catch { /* ignora */ }
         }
     }
 
@@ -567,7 +586,7 @@ public sealed class NucleoHost : IDisposable
 
         try
         {
-            m.Instancia = (IDalamudPlugin)ctor.Invoke(args);
+            m.Instancia = ctor.Invoke(args);
         }
         catch (TargetInvocationException tie) when (tie.InnerException != null)
         {
@@ -661,12 +680,73 @@ public sealed class NucleoHost : IDisposable
         return achados;
     }
 
-    private void DescarregarAgora(NucleoItem m)
+    /// <summary>Chama o LoadAsync de um plugin no formato novo (IAsyncDalamudPlugin).</summary>
+    private async Task ChamarLoadAsync(NucleoItem m)
     {
-        try { m.Instancia?.Dispose(); }
-        catch (Exception ex) { log.Error(ex, "[LirouHub] Erro ao desligar " + m.Nome); }
+        var inst = m.Instancia;
+        if (inst == null) return;
+
+        var itf = inst.GetType().GetInterfaces().FirstOrDefault(i => i.Name == "IAsyncDalamudPlugin");
+        var metodo = itf?.GetMethod("LoadAsync")
+                     ?? inst.GetType().GetMethod("LoadAsync", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (metodo == null)
+        {
+            m.Add("Plugin no formato novo sem LoadAsync: nada a chamar.");
+            return;
+        }
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        var args = metodo.GetParameters()
+            .Select(p => p.ParameterType == typeof(CancellationToken)
+                ? (object?)cts.Token
+                : (p.HasDefaultValue ? p.DefaultValue : null))
+            .ToArray();
+
+        m.Add("Chamando LoadAsync...");
+        Task? tarefa;
+        try
+        {
+            tarefa = metodo.Invoke(inst, args) as Task;
+        }
+        catch (TargetInvocationException tie) when (tie.InnerException != null)
+        {
+            ExceptionDispatchInfo.Capture(tie.InnerException).Throw();
+            throw;
+        }
+
+        if (tarefa != null) await tarefa.WaitAsync(TimeSpan.FromSeconds(65));
+        m.Add("LoadAsync concluído.");
+    }
+
+    /// <summary>Desliga um plugin: Dispose na thread do jogo (formato antigo) ou DisposeAsync (formato novo).</summary>
+    private async Task DescarregarAsync(NucleoItem m)
+    {
+        var inst = m.Instancia;
         m.Instancia = null;
         m.Assembly = null;
+        try
+        {
+            if (inst is IDalamudPlugin p) await framework.RunOnFrameworkThread(() => p.Dispose());
+            else if (inst is IAsyncDisposable ad) await ad.DisposeAsync();
+        }
+        catch (Exception ex) { log.Error(ex, "[LirouHub] Erro ao desligar " + m.Nome); }
+        try { m.Contexto?.Unload(); } catch { /* ignora */ }
+        m.Contexto = null;
+    }
+
+    /// <summary>Usado só quando o próprio Lirou Hub é descarregado (já está na thread do jogo).</summary>
+    private void DescarregarSincrono(NucleoItem m)
+    {
+        var inst = m.Instancia;
+        m.Instancia = null;
+        m.Assembly = null;
+        try
+        {
+            if (inst is IDalamudPlugin p) p.Dispose();
+            else if (inst is IAsyncDisposable ad)
+                Task.Run(async () => await ad.DisposeAsync()).Wait(TimeSpan.FromSeconds(3));
+        }
+        catch (Exception ex) { log.Error(ex, "[LirouHub] Erro ao desligar " + m.Nome); }
         try { m.Contexto?.Unload(); } catch { /* ignora */ }
         m.Contexto = null;
     }
@@ -687,7 +767,7 @@ public sealed class NucleoHost : IDisposable
 
     public void Dispose()
     {
-        foreach (var m in Itens.Reverse()) DescarregarAgora(m);
+        foreach (var m in Itens.Reverse()) DescarregarSincrono(m);
         Ligado = false;
     }
 }
